@@ -179,15 +179,8 @@ def analyze(
 
 def generate_sample_data(output_dir: str = "data") -> None:
     """Generate synthetic sample data in *output_dir*."""
-    import sys
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "generate_sample_data",
-        os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "generate_sample_data.py"),
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.generate_synthetic_data(output_dir)
+    from reforecast.sample_data import generate_synthetic_data
+    generate_synthetic_data(output_dir)
 
 
 def _parse_time(t: str) -> int:
