@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def write_interval_csv(path: str, result: AnalysisResult) -> str:
-    """Write interval-level analysis to CSV."""
+    """Write interval-level analysis to CSV with all computed fields."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     rows = []
     for iv in result.intervals:
@@ -27,10 +27,17 @@ def write_interval_csv(path: str, result: AnalysisResult) -> str:
             "actual_volume": iv.actual_volume or "",
             "actual_aht_seconds": iv.actual_aht_seconds or "",
             "reforecast_volume": iv.reforecast_volume or "",
+            "forecast_required_net_fte": iv.forecast_required_net_fte or "",
+            "forecast_required_gross_fte": iv.forecast_required_gross_fte or "",
+            "actual_required_net_fte": iv.actual_required_net_fte or "",
+            "actual_required_gross_fte": iv.actual_required_gross_fte or "",
+            "reforecast_required_net_fte": iv.reforecast_required_net_fte or "",
+            "reforecast_required_gross_fte": iv.reforecast_required_gross_fte or "",
             "scheduled_fte": iv.scheduled_fte or "",
+            "staffing_gap_fte": iv.staffing_gap_fte or "",
         })
     pd.DataFrame(rows).to_csv(path, index=False)
-    logger.info("Interval CSV: %s", path)
+    logger.info("Interval CSV: %s (%d rows)", path, len(rows))
     return path
 
 

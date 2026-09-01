@@ -73,7 +73,14 @@ def _write_intervals(writer: Any, result: AnalysisResult) -> None:
             "Actual Volume": iv.actual_volume or "",
             "Actual AHT (s)": iv.actual_aht_seconds or "",
             "Reforecast Volume": iv.reforecast_volume or "",
+            "Forecast Req Net FTE": iv.forecast_required_net_fte or "",
+            "Forecast Req Gross FTE": iv.forecast_required_gross_fte or "",
+            "Actual Req Net FTE": iv.actual_required_net_fte or "",
+            "Actual Req Gross FTE": iv.actual_required_gross_fte or "",
+            "Reforecast Req Net FTE": iv.reforecast_required_net_fte or "",
+            "Reforecast Req Gross FTE": iv.reforecast_required_gross_fte or "",
             "Scheduled FTE": iv.scheduled_fte or "",
+            "Staffing Gap FTE": iv.staffing_gap_fte or "",
         })
     pd.DataFrame(rows).to_excel(writer, sheet_name="Interval_Analysis", index=False)
 
@@ -104,6 +111,8 @@ def _write_gaps(writer: Any, result: AnalysisResult) -> None:
             "Forecast Required Gross FTE": g.forecast_required_gross_fte or "",
             "Actual Required Net FTE": g.actual_required_net_fte or "",
             "Actual Required Gross FTE": g.actual_required_gross_fte or "",
+            "Reforecast Required Net FTE": g.reforecast_required_net_fte or "",
+            "Reforecast Required Gross FTE": g.reforecast_required_gross_fte or "",
             "Scheduled FTE": g.scheduled_fte or "N/A",
             "Gap FTE": g.gap_fte or "N/A",
             "Status": g.status,
