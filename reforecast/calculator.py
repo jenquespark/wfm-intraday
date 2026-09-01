@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-from reforecast.config import Config, ChannelType
+from reforecast.config import Config
 from reforecast.erlang import (
     required_positions,
     chat_required_positions,
@@ -329,7 +329,6 @@ def _reconcile_keys(
     if schedule_df is not None:
         sd_keys = set(zip(schedule_df["date"], schedule_df["lob"], schedule_df["interval_start"]))
 
-    all_keys = fc_keys | ac_keys | sd_keys
     matched = fc_keys & ac_keys
 
     return ReconciliationReport(
@@ -492,7 +491,7 @@ def format_summary(
         )
 
     # Staffing gaps
-    lines.append(f"\n📋 STAFFING GAP ANALYSIS")
+    lines.append("\n📋 STAFFING GAP ANALYSIS")
     lines.append(f"  Understaffed intervals:  {gap_counts.get('understaffed', 0)}")
     lines.append(f"  Overstaffed intervals:   {gap_counts.get('overstaffed', 0)}")
     lines.append(f"  Balanced intervals:      {gap_counts.get('balanced', 0)}")
@@ -501,7 +500,7 @@ def format_summary(
 
     # Reforecast
     if reforecast_results:
-        lines.append(f"\n🔄 REFORECAST CHECKPOINT")
+        lines.append("\n🔄 REFORECAST CHECKPOINT")
         # Show up to 5 results
         for rr in reforecast_results[:5]:
             orig_total = sum(rr.original_forecast)

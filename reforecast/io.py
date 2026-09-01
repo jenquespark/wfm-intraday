@@ -16,7 +16,6 @@ from reforecast.models import (
     AccuracyMetrics,
     ReconciliationReport,
     RedistributionRecommendation,
-    ReforecastResult,
     StaffingGap,
     validate_columns,
 )

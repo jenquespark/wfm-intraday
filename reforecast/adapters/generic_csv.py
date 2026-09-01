@@ -38,7 +38,6 @@ from reforecast.domain.models import (
     ACTUALS_COLUMNS,
     FORECAST_COLUMNS,
     SCHEDULE_COLUMNS,
-    validate_columns,
 )
 
 logger = logging.getLogger(__name__)

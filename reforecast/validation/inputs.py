@@ -81,7 +81,6 @@ def reconcile_keys(
     ac_keys = _key_set(actuals_df)
     sd_keys = _key_set(staffing_df) if staffing_df is not None else set()
 
-    all_keys = fc_keys | ac_keys | sd_keys
     matched = fc_keys & ac_keys
 
     return ReconciliationReport(

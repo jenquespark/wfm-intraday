@@ -43,6 +43,10 @@ addopts = "-v --tb=short"
 line-length = 100
 target-version = "py311"
 extend-select = ["I"]
+ignore = ["F401"]
+
+[tool.ruff.lint]
+ignore = ["F401"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -14,7 +14,6 @@ import argparse
 import logging
 import os
 import sys
-import textwrap
 from typing import List, Optional
 
 from reforecast import __version__
@@ -204,7 +203,7 @@ def _print_summary(result: AnalysisResult) -> None:
         counts = {}
         for g in gaps:
             counts[g.status] = counts.get(g.status, 0) + 1
-        print(f"\n📋 STAFFING")
+        print("\n📋 STAFFING")
         print(f"  Understaffed:  {counts.get('understaffed', 0)}")
         print(f"  Overstaffed:   {counts.get('overstaffed', 0)}")
         print(f"  Balanced:      {counts.get('balanced', 0)}")

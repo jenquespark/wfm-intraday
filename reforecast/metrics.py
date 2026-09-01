@@ -8,7 +8,7 @@ are excluded from MAPE and the overall WAPE denominator is guarded.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
+from typing import Dict
 
 import numpy as np
 import pandas as pd
