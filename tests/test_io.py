@@ -8,7 +8,7 @@ import tempfile
 import pandas as pd
 import pytest
 
-from reforecast.io import (
+from wfm_intraday.io import (
     load_csv,
     load_forecast,
     load_actuals,
@@ -18,7 +18,7 @@ from reforecast.io import (
     write_redistribution_csv,
     write_accuracy_json,
 )
-from reforecast.models import (
+from wfm_intraday.models import (
     FORECAST_COLUMNS,
     ACTUALS_COLUMNS,
     SCHEDULE_COLUMNS,

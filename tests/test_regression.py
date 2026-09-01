@@ -7,8 +7,8 @@ import tempfile
 import os
 import pandas as pd
 import numpy as np
-from reforecast.config import Config
-from reforecast import analyze
+from wfm_intraday.config import Config
+from wfm_intraday import analyze
 
 
 def _make_forecast_actuals(num_intervals: int = 10, date: str = "2026-09-01"):
@@ -239,7 +239,7 @@ class TestAsOfLookAhead:
             result = analyze(forecast_path=fc_path, actuals_path=ac_path)
 
             # Write JSON
-            from reforecast.reporting.json import write_analysis_json
+            from wfm_intraday.reporting.json import write_analysis_json
             json_path = os.path.join(tmp, "output.json")
             write_analysis_json(json_path, result)
 
@@ -261,13 +261,13 @@ class TestShrinkageBoundary:
 
     def test_shrinkage_zero(self):
         config = Config(shrinkage_pct=0.0)
-        from reforecast.calculator import _compute_staffing_req
+        from wfm_intraday.calculator import _compute_staffing_req
         req = _compute_staffing_req(100.0, 180.0, 1800, config, "voice")
         assert abs(req.gross_fte - req.net_fte) < 0.01
 
     def test_shrinkage_normal(self):
         config = Config(shrinkage_pct=0.34)
-        from reforecast.calculator import _compute_staffing_req
+        from wfm_intraday.calculator import _compute_staffing_req
         req = _compute_staffing_req(100.0, 180.0, 1800, config, "voice")
         expected = req.net_fte / 0.66
         assert abs(req.gross_fte - expected) < 0.01
@@ -275,7 +275,7 @@ class TestShrinkageBoundary:
     def test_shrinkage_high_valid(self):
         """0.99 shrinkage → gross = net / 0.01 (huge but valid)."""
         config = Config(shrinkage_pct=0.99)
-        from reforecast.calculator import _compute_staffing_req
+        from wfm_intraday.calculator import _compute_staffing_req
         req = _compute_staffing_req(100.0, 180.0, 1800, config, "voice")
         expected = req.net_fte / 0.01
         assert abs(req.gross_fte - expected) < 0.01

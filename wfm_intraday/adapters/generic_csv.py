@@ -33,8 +33,8 @@ from typing import Dict, Optional
 
 import pandas as pd
 
-from reforecast.adapters.base import InputAdapter, register_adapter
-from reforecast.domain.models import (
+from wfm_intraday.adapters.base import InputAdapter, register_adapter
+from wfm_intraday.domain.models import (
     ACTUALS_COLUMNS,
     FORECAST_COLUMNS,
     SCHEDULE_COLUMNS,

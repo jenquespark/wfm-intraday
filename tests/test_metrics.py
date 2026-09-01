@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from reforecast.metrics import calculate_wape, calculate_mape, calculate_bias, calculate_all
+from wfm_intraday.metrics import calculate_wape, calculate_mape, calculate_bias, calculate_all
 
 
 class TestWAPE:

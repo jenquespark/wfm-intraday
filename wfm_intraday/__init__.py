@@ -1,8 +1,8 @@
-"""WFM Reforecast Engine — public API.
+"""WFM Intraday — public API.
 
 Usage::
 
-    from reforecast import analyze, validate
+    from wfm_intraday import analyze, validate
 
     result = analyze("forecast.csv", "actuals.csv", mode="as-of", checkpoint="12:00")
     print(result.forecast_accuracy["overall"]["wape"])
@@ -18,16 +18,16 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from reforecast.config import Config
-from reforecast.domain.models import (
+from wfm_intraday.config import Config
+from wfm_intraday.domain.models import (
     AnalysisResult,
     IntervalRecord,
     ReconciliationReport,
     ReforecastResult,
     StaffingGap,
 )
-from reforecast.metrics import calculate_all, calculate_per_lob
-from reforecast.validation.inputs import validate_input_files, reconcile_keys
+from wfm_intraday.metrics import calculate_all, calculate_per_lob
+from wfm_intraday.validation.inputs import validate_input_files, reconcile_keys
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +181,7 @@ def analyze(
     )
 
     # ── 11. Redistribution (uses canonical gaps) ───────────────────────
-    from reforecast.calculator import calculate_redistribution as _calc_redist
+    from wfm_intraday.calculator import calculate_redistribution as _calc_redist
     redistribution = _calc_redist(gaps, config)
 
     # ── 12. Build result ───────────────────────────────────────────────
@@ -209,7 +209,7 @@ def analyze(
 
 def generate_sample_data(output_dir: str = "data") -> None:
     """Generate synthetic sample data in *output_dir*."""
-    from reforecast.sample_data import generate_synthetic_data
+    from wfm_intraday.sample_data import generate_synthetic_data
     generate_synthetic_data(output_dir)
 
 
@@ -306,7 +306,7 @@ def _compute_reforecast(
     In as-of mode, only actuals up to the checkpoint influence the scale
     factor.  Future actuals are ignored even if present in the input.
     """
-    from reforecast.calculator import calculate_reforecast as _calc
+    from wfm_intraday.calculator import calculate_reforecast as _calc
 
     if mode == "as-of" and as_of_mask is not None:
         # Mask actuals after checkpoint so reforecast only sees completed data
@@ -334,7 +334,7 @@ def _build_intervals(
     mode: str = "retrospective",
 ) -> List[IntervalRecord]:
     """Build fully-populated interval records including all computed values."""
-    from reforecast.calculator import (
+    from wfm_intraday.calculator import (
         _compute_staffing_req,
         _channel_from_row,
     )
@@ -455,7 +455,7 @@ def _compute_staffing_gaps(
     mode: str = "retrospective",
 ) -> List[StaffingGap]:
     """Compute StaffingGap objects with proper future-interval handling."""
-    from reforecast.calculator import (
+    from wfm_intraday.calculator import (
         _compute_staffing_req,
         _channel_from_row,
     )

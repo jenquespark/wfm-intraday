@@ -3,16 +3,16 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wfm-reforecast-engine"
+name = "wfm-intraday"
 version = "0.2.0"
-description = "Interval-level forecast vs actual gap analysis and reforecasting for contact center WFM"
+description = "Interval-level forecast variance, reforecasting, and staffing gap analysis for contact center WFM teams"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
     {name = "Cenk Yigitoglu", email = "jenque@onpoint.works"},
 ]
-keywords = ["wfm", "workforce-management", "contact-center", "forecasting", "erlang-c"]
+keywords = ["wfm", "workforce-management", "contact-center", "forecasting", "erlang-c", "intraday"]
 
 dependencies = [
     "pandas>=2.0",
@@ -29,10 +29,10 @@ dev = ["pytest>=7.0", "matplotlib>=3.5", "streamlit>=1.28", "ruff>=0.1", "mypy>=
 
 [project.urls]
 Homepage = "https://www.onpoint.works"
-Repository = "https://github.com/jenquespark/wfm-reforecast-engine"
+Repository = "https://github.com/jenquespark/wfm-intraday"
 
 [project.scripts]
-wfm-reforecast = "reforecast.cli.main:main"
+wfm-intraday = "wfm_intraday.cli.main:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -53,3 +53,6 @@ python_version = "3.11"
 strict = false
 warn_unused_ignores = true
 ignore_missing_imports = true
+
+[tool.setuptools.packages.find]
+where = ["."]

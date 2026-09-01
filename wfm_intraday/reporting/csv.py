@@ -7,7 +7,7 @@ import os
 
 import pandas as pd
 
-from reforecast.domain.models import AnalysisResult
+from wfm_intraday.domain.models import AnalysisResult
 
 logger = logging.getLogger(__name__)
 

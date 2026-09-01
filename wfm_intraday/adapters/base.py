@@ -62,5 +62,5 @@ def get_adapter(source_hint: str = "") -> InputAdapter:
         if cls.can_handle(source_hint):
             return cls()
     # Fallback to generic CSV
-    from reforecast.adapters.generic_csv import GenericCSVAdapter
+    from wfm_intraday.adapters.generic_csv import GenericCSVAdapter
     return GenericCSVAdapter()

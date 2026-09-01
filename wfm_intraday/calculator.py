@@ -12,13 +12,13 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from reforecast.config import Config
-from reforecast.erlang import (
+from wfm_intraday.config import Config
+from wfm_intraday.erlang import (
     required_positions,
     chat_required_positions,
     async_required_positions,
 )
-from reforecast.models import (
+from wfm_intraday.models import (
     AccuracyMetrics,
     ReconciliationReport,
     RedistributionRecommendation,
@@ -421,7 +421,7 @@ def format_summary(
     reconciliation: Optional[ReconciliationReport] = None,
 ) -> str:
     """Format a human-readable summary for terminal output."""
-    from reforecast.models import ReconciliationReport as RR
+    from wfm_intraday.models import ReconciliationReport as RR
     if reconciliation is None:
         reconciliation = RR(
             forecast_rows=0, actual_rows=0, scheduled_rows=0,
@@ -430,7 +430,7 @@ def format_summary(
 
     lines: List[str] = []
     lines.append("=" * 60)
-    lines.append("WFM REFORECAST ENGINE — ANALYSIS SUMMARY")
+    lines.append("WFM INTRADAY — ANALYSIS SUMMARY")
     lines.append("=" * 60)
 
     if reconciliation.has_mismatch:

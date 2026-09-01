@@ -7,7 +7,7 @@ import logging
 import os
 from typing import Any, Dict, List
 
-from reforecast.domain.models import AnalysisResult
+from wfm_intraday.domain.models import AnalysisResult
 
 logger = logging.getLogger(__name__)
 

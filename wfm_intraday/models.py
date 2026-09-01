@@ -4,7 +4,7 @@ This file is kept so existing imports from ``reforecast.models`` continue to
 work.  New code should import from ``reforecast.domain.models`` directly.
 """
 
-from reforecast.domain.models import (  # noqa: F401
+from wfm_intraday.domain.models import (  # noqa: F401
     AccuracyMetrics,
     ACTUALS_COLUMNS,
     AnalysisResult,

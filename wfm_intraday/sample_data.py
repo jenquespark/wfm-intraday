@@ -17,8 +17,8 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from reforecast.config import Config
-from reforecast.erlang import required_positions
+from wfm_intraday.config import Config
+from wfm_intraday.erlang import required_positions
 
 logger = logging.getLogger(__name__)
 

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pandas as pd
 import numpy as np
-from reforecast.config import Config
-from reforecast.calculator import (
+from wfm_intraday.config import Config
+from wfm_intraday.calculator import (
     compute_staffing_requirement,
     calculate_staffing_gap,
     calculate_redistribution,
     calculate_reforecast,
 )
-from reforecast.validation.inputs import reconcile_keys as _reconcile_keys
-from reforecast.models import StaffingGap
+from wfm_intraday.validation.inputs import reconcile_keys as _reconcile_keys
+from wfm_intraday.models import StaffingGap
 
 
 # ---------- compile_staffing_requirement ----------

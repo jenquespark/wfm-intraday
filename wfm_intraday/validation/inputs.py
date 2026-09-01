@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from reforecast.domain.models import (
+from wfm_intraday.domain.models import (
     ACTUALS_COLUMNS,
     FORECAST_COLUMNS,
     SCHEDULE_COLUMNS,

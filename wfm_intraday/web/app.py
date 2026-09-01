@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""WFM Reforecast Engine — Local web interface.
+"""WFM Intraday — Local web interface.
 
 Start with::
 
-    wfm-reforecast web
+    wfm-intraday web
 
 Or::
 
@@ -18,10 +18,10 @@ import tempfile
 import streamlit as st
 import pandas as pd
 
-from reforecast import analyze, validate, __version__
+from wfm_intraday import analyze, validate, __version__
 
-st.set_page_config(page_title="WFM Reforecast Engine", layout="wide")
-st.title("WFM Reforecast Engine")
+st.set_page_config(page_title="WFM Intraday", layout="wide")
+st.title("WFM Intraday")
 st.caption(f"v{__version__} — Forecast vs actual gap analysis")
 
 # Session state
@@ -166,19 +166,19 @@ if analyze_btn and st.session_state.validated and uploaded_forecast and uploaded
                 out_dir = os.path.join(tmpdir, "output")
                 os.makedirs(out_dir, exist_ok=True)
 
-                from reforecast.reporting.excel import write_excel_report
-                excel_path = os.path.join(out_dir, "reforecast_report.xlsx")
+                from wfm_intraday.reporting.excel import write_excel_report
+                excel_path = os.path.join(out_dir, "intraday_report.xlsx")
                 write_excel_report(excel_path, result)
                 with open(excel_path, "rb") as f:
-                    st.download_button("Download Excel Report", f, file_name="reforecast_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button("Download Excel Report", f, file_name="intraday_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-                from reforecast.reporting.json import write_analysis_json
+                from wfm_intraday.reporting.json import write_analysis_json
                 json_path = os.path.join(out_dir, "analysis.json")
                 write_analysis_json(json_path, result)
                 with open(json_path, "rb") as f:
                     st.download_button("Download JSON", f, file_name="analysis.json", mime="application/json")
 
-                from reforecast.reporting.csv import write_interval_csv
+                from wfm_intraday.reporting.csv import write_interval_csv
                 csv_path = os.path.join(out_dir, "interval_analysis.csv")
                 write_interval_csv(csv_path, result)
                 with open(csv_path, "rb") as f:
@@ -195,6 +195,6 @@ if not st.session_state.validated:
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
-    "WFM Reforecast Engine compares forecast and actual contact volume "
+    "WFM Intraday compares forecast and actual contact volume "
     "at interval level and recalculates staffing requirements."
 )

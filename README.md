@@ -1,4 +1,4 @@
-# WFM Reforecast Engine
+# WFM Intraday
 
 Interval-level forecast vs actual gap analysis and intra-day reforecasting
 for contact centre workforce management teams.  The tool reads exported CSV
@@ -26,24 +26,24 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 
 # Generate sample data
-wfm-reforecast sample
+wfm-intraday sample
 
 # Validate input files
-wfm-reforecast validate --forecast data/forecast.csv --actual data/actuals.csv \
+wfm-intraday validate --forecast data/forecast.csv --actual data/actuals.csv \
     --staffing data/schedule.csv
 
 # Run full analysis
-wfm-reforecast analyze --forecast data/forecast.csv --actual data/actuals.csv \
+wfm-intraday analyze --forecast data/forecast.csv --actual data/actuals.csv \
     --staffing data/schedule.csv --output-dir output
 
 # With as‑of checkpoint
-wfm-reforecast analyze --forecast data/forecast.csv --actual data/actuals.csv \
+wfm-intraday analyze --forecast data/forecast.csv --actual data/actuals.csv \
     --staffing data/schedule.csv --mode as-of --checkpoint 12:00 --date 2026-09-01
 ```
 
 Output files appear in `output/`:
-- `reforecast_report.xlsx`  — multi‑sheet Excel workbook
-- `accuracy_summary.json`   — machine‑readable accuracy + interval data
+- `intraday_report.xlsx`  — multi‑sheet Excel workbook
+- `analysis.json`   — machine‑readable accuracy + interval data
 - `interval_analysis.csv`   — interval‑level detail
 
 ## Supported channels

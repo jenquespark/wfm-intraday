@@ -8,7 +8,7 @@ import os
 import pytest
 import yaml
 
-from reforecast.config import Config, ChannelConfig, ChannelType
+from wfm_intraday.config import Config, ChannelConfig, ChannelType
 
 
 class TestConfigValidation:

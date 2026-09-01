@@ -31,6 +31,6 @@ jobs:
 
       - name: Generate sample data and run
         run: |
-          wfm-reforecast sample
-          wfm-reforecast validate --forecast data/forecast.csv --actual data/actuals.csv --staffing data/schedule.csv
-          wfm-reforecast analyze --forecast data/forecast.csv --actual data/actuals.csv --staffing data/schedule.csv --output-dir output
+          wfm-intraday sample
+          wfm-intraday validate --forecast data/forecast.csv --actual data/actuals.csv --staffing data/schedule.csv
+          wfm-intraday analyze --forecast data/forecast.csv --actual data/actuals.csv --staffing data/schedule.csv --output-dir output

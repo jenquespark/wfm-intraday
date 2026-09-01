@@ -1,4 +1,4 @@
-"""Canonical domain models for the WFM Reforecast Engine.
+"""Canonical domain models for the WFM Intraday.
 
 Every typed data object is defined ONCE here.  The module reforecast.models
 now re-exports from this module for backward compatibility.

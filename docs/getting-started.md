@@ -8,8 +8,8 @@
 ## Installation
 
 ```bash
-git clone https://github.com/jenquespark/wfm-reforecast-engine.git
-cd wfm-reforecast-engine
+git clone https://github.com/jenquespark/wfm-intraday.git
+cd wfm-intraday
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -18,14 +18,14 @@ pip install -e .
 Verify:
 
 ```bash
-wfm-reforecast --version
-wfm-reforecast --help
+wfm-intraday --version
+wfm-intraday --help
 ```
 
 ## Generate sample data
 
 ```bash
-wfm-reforecast sample
+wfm-intraday sample
 ```
 
 Creates `data/forecast.csv`, `data/actuals.csv`, and `data/schedule.csv`
@@ -34,27 +34,27 @@ with 5 weeks of synthetic data for 3 lines of business.
 ## Validate input files
 
 ```bash
-wfm-reforecast validate --forecast data/forecast.csv --actual data/actuals.csv \
+wfm-intraday validate --forecast data/forecast.csv --actual data/actuals.csv \
     --staffing data/schedule.csv
 ```
 
 ## Run analysis
 
 ```bash
-wfm-reforecast analyze --forecast data/forecast.csv --actual data/actuals.csv \
+wfm-intraday analyze --forecast data/forecast.csv --actual data/actuals.csv \
     --staffing data/schedule.csv --output-dir output
 ```
 
 Output:
 
-* `output/reforecast_report.xlsx`
-* `output/accuracy_summary.json`
+* `output/intraday_report.xlsx`
+* `output/analysis.json`
 * `output/interval_analysis.csv`
 
 ## Run as-of (intra-day) analysis
 
 ```bash
-wfm-reforecast analyze --forecast data/forecast.csv --actual data/actuals.csv \
+wfm-intraday analyze --forecast data/forecast.csv --actual data/actuals.csv \
     --staffing data/schedule.csv --mode as-of --checkpoint 12:00 \
     --date 2026-05-04 --output-dir output
 ```
@@ -66,13 +66,13 @@ intervals use reforecast‑based staffing requirements.
 
 ```bash
 pip install -e ".[web]"
-wfm-reforecast web
+wfm-intraday web
 ```
 
 ## Programmatic use
 
 ```python
-from reforecast import analyze, validate
+from wfm_intraday import analyze, validate
 
 result = analyze("data/forecast.csv", "data/actuals.csv",
                  staffing_path="data/schedule.csv",

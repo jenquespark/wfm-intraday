@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""WFM Reforecast Engine — CLI entry point.
+"""WFM Intraday — CLI entry point.
 
 Usage::
 
-    wfm-reforecast validate --forecast data/forecast.csv --actual data/actual.csv
-    wfm-reforecast analyze --forecast data/forecast.csv --actual data/actual.csv
-    wfm-reforecast sample
-    wfm-reforecast web
+    wfm-intraday validate --forecast data/forecast.csv --actual data/actual.csv
+    wfm-intraday analyze --forecast data/forecast.csv --actual data/actual.csv
+    wfm-intraday sample
+    wfm-intraday web
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ import os
 import sys
 from typing import List, Optional
 
-from reforecast import __version__
-from reforecast.domain.models import AnalysisResult
-from reforecast.validation.inputs import validate_input_files, reconcile_keys
+from wfm_intraday import __version__
+from wfm_intraday.domain.models import AnalysisResult
+from wfm_intraday.validation.inputs import validate_input_files, reconcile_keys
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,8 +43,8 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="wfm-reforecast",
-        description="Interval-level forecast vs actual gap analysis for contact centers",
+        prog="wfm-intraday",
+        description="Interval-level forecast variance, reforecasting, and staffing gap analysis for contact center WFM teams",
     )
     parser.add_argument("--version", action="store_true", help="Print version and exit")
 
@@ -107,8 +107,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 def cmd_analyze(args: argparse.Namespace) -> int:
     """Run the full analysis pipeline."""
-    from reforecast import analyze as run_analysis
-    from reforecast.config import Config
+    from wfm_intraday import analyze as run_analysis
+    from wfm_intraday.config import Config
 
     # Load config
     config_path = args.config
@@ -153,8 +153,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     output_errors = 0
 
     try:
-        from reforecast.reporting.excel import write_excel_report
-        excel_path = os.path.join(output_dir, "reforecast_report.xlsx")
+        from wfm_intraday.reporting.excel import write_excel_report
+        excel_path = os.path.join(output_dir, "intraday_report.xlsx")
         write_excel_report(excel_path, result)
         print(f"Excel: {excel_path}")
     except Exception as e:
@@ -162,8 +162,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         output_errors += 1
 
     try:
-        from reforecast.reporting.json import write_analysis_json
-        json_path = os.path.join(output_dir, "accuracy_summary.json")
+        from wfm_intraday.reporting.json import write_analysis_json
+        json_path = os.path.join(output_dir, "analysis.json")
         write_analysis_json(json_path, result)
         print(f"JSON:  {json_path}")
     except Exception as e:
@@ -171,7 +171,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         output_errors += 1
 
     try:
-        from reforecast.reporting.csv import write_interval_csv, write_redistribution_csv
+        from wfm_intraday.reporting.csv import write_interval_csv, write_redistribution_csv
         csv_path = os.path.join(output_dir, "interval_analysis.csv")
         write_interval_csv(csv_path, result)
         if result.redistribution:
@@ -235,7 +235,7 @@ def _print_summary(result: AnalysisResult) -> None:
 
 def cmd_sample(args: argparse.Namespace) -> int:
     """Generate sample data."""
-    from reforecast import generate_sample_data
+    from wfm_intraday import generate_sample_data
     generate_sample_data("data")
     print("Sample data generated in data/")
     return EXIT_SUCCESS
@@ -265,7 +265,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if hasattr(args, "version") and args.version:
-        print(f"wfm-reforecast {__version__}")
+        print(f"wfm-intraday {__version__}")
         return EXIT_SUCCESS
 
     commands = {

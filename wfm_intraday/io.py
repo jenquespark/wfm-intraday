@@ -1,4 +1,4 @@
-"""CSV/Excel/JSON input/output for WFM Reforecast Engine."""
+"""CSV/Excel/JSON input/output for WFM Intraday."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from reforecast.models import (
+from wfm_intraday.models import (
     ACTUALS_COLUMNS,
     FORECAST_COLUMNS,
     SCHEDULE_COLUMNS,

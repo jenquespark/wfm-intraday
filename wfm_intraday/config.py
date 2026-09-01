@@ -1,4 +1,4 @@
-"""Configuration management for WFM Reforecast Engine.
+"""Configuration management for WFM Intraday.
 
 Parameters are validated at load time.  Unknown keys are preserved so that
 forward-compatible configs can be shared without error, but critical misspellings

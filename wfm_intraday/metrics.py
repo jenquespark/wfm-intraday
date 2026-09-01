@@ -13,7 +13,7 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
-from reforecast.models import AccuracyMetrics
+from wfm_intraday.models import AccuracyMetrics
 
 logger = logging.getLogger(__name__)
 

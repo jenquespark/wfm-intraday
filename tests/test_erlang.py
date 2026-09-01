@@ -6,7 +6,7 @@ Reference values are computed independently to verify correctness.
 from __future__ import annotations
 
 import math
-from reforecast.erlang import (
+from wfm_intraday.erlang import (
     erlang_c_pw,
     required_positions,
     service_level_probability,
