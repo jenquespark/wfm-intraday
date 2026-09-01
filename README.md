@@ -4,8 +4,7 @@ Compares forecast and actual contact volume at interval level, recalculates
 staffing requirements as the day develops, and identifies gaps between what
 was planned and what was actually needed.
 
-Works from exported operational data — no live WFM platform integration, no
-API credentials, no real-time access.  You give it CSVs; it gives you
+Works from exported operational data. You give it CSVs; it gives you
 numbers.
 
 ---
