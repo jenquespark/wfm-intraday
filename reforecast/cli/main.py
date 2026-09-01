@@ -105,12 +105,23 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     """Run the full analysis pipeline."""
     from reforecast import analyze as run_analysis
 
+    # Load config separately so config errors return EXIT_CONFIG_ERROR (1)
+    from reforecast.config import Config
+    try:
+        config = Config.from_yaml(args.config)
+    except FileNotFoundError:
+        print(f"ERROR: Config file not found: {args.config}")
+        return EXIT_CONFIG_ERROR
+    except ValueError as e:
+        print(f"ERROR: Invalid config: {e}")
+        return EXIT_CONFIG_ERROR
+
     try:
         result = run_analysis(
             forecast_path=args.forecast,
             actuals_path=args.actuals,
             staffing_path=args.staffing,
-            config_path=args.config,
+            config_obj=config,
             lob_filter=args.lob,
             date_filter=args.date,
             checkpoint_override=args.checkpoint,
