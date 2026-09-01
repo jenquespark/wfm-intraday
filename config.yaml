@@ -1,0 +1,13 @@
+# WFM Reforecast Engine Configuration
+# See reforecast/config.py for field documentation
+
+interval_length: 30
+aht_seconds: 270
+shrinkage_pct: 0.34
+service_level: 0.80
+sl_threshold_seconds: 20
+max_occupancy: 0.85
+overstaff_threshold_pct: 0.15
+understaff_threshold_pct: 0.10
+reforecast_checkpoint_interval: 10
+reforecast_blend_factor: 0.50
