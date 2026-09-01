@@ -74,7 +74,13 @@ def analyze(
     # --- Load config ---
     config = config_obj
     if config is None:
-        config = Config.from_yaml(config_path or "config.yaml")
+        if config_path:
+            config = Config.from_yaml(config_path)
+        else:
+            try:
+                config = Config.from_yaml("config.yaml")
+            except FileNotFoundError:
+                config = Config()
 
     # --- Load and validate data ---
     fc_df, ac_df, sd_df, warns = validate_input_files(forecast_path, actuals_path, staffing_path)

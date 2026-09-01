@@ -35,7 +35,8 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--forecast", required=True, help="Forecast CSV path")
     parser.add_argument("--actual", required=True, dest="actuals", help="Actuals CSV path")
     parser.add_argument("--staffing", default=None, help="Schedule/staffing CSV path (optional)")
-    parser.add_argument("--config", default="config.yaml", help="Config YAML path (default: config.yaml)")
+    parser.add_argument("--config", default=None,
+                        help="Config YAML path (default: config.yaml in cwd, or built-in defaults)")
     parser.add_argument("--lob", default=None, help="Filter to one LOB")
 
 
@@ -105,16 +106,24 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     """Run the full analysis pipeline."""
     from reforecast import analyze as run_analysis
 
-    # Load config separately so config errors return EXIT_CONFIG_ERROR (1)
+    # Load config — if no path specified, try config.yaml then fall back to defaults
     from reforecast.config import Config
-    try:
-        config = Config.from_yaml(args.config)
-    except FileNotFoundError:
-        print(f"ERROR: Config file not found: {args.config}")
-        return EXIT_CONFIG_ERROR
-    except ValueError as e:
-        print(f"ERROR: Invalid config: {e}")
-        return EXIT_CONFIG_ERROR
+    config_path = args.config
+    if config_path is None:
+        try:
+            config = Config.from_yaml("config.yaml")
+        except FileNotFoundError:
+            config = Config()
+            print("Using built-in default configuration (config.yaml not found)")
+    else:
+        try:
+            config = Config.from_yaml(config_path)
+        except FileNotFoundError:
+            print(f"ERROR: Config file not found: {config_path}")
+            return EXIT_CONFIG_ERROR
+        except ValueError as e:
+            print(f"ERROR: Invalid config: {e}")
+            return EXIT_CONFIG_ERROR
 
     try:
         result = run_analysis(
