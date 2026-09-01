@@ -22,6 +22,7 @@ from reforecast.config import Config
 from reforecast.domain.models import (
     AnalysisResult,
     IntervalRecord,
+    ReconciliationReport,
     ReforecastResult,
     StaffingGap,
 )
@@ -39,14 +40,21 @@ def validate(
     actuals_path: str,
     staffing_path: Optional[str] = None,
     column_mapping: Optional[Dict[str, str]] = None,
-) -> None:
-    """Validate input files and print a reconciliation report.
+) -> ReconciliationReport:
+    """Validate input files and return a reconciliation report.
 
     Args:
         forecast_path: Path to forecast CSV.
         actuals_path: Path to actuals CSV.
         staffing_path: Optional path to schedule CSV.
         column_mapping: Optional column name mapping dict.
+
+    Returns:
+        ReconciliationReport with key-matching statistics.
+
+    Raises:
+        FileNotFoundError: If a required input file is missing.
+        ValueError: If input columns or values are invalid.
     """
     fc_df, ac_df, sd_df, warns = validate_input_files(
         forecast_path, actuals_path, staffing_path, column_mapping=column_mapping
@@ -74,6 +82,8 @@ def validate(
         print("  Status: PASSED WITH WARNINGS")
     else:
         print("  Status: OK")
+
+    return report
 
 
 def analyze(

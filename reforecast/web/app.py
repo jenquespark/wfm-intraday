@@ -101,7 +101,7 @@ if analyze_btn and st.session_state.validated and uploaded_forecast and uploaded
                     actuals_path=ac_path,
                     staffing_path=sd_path,
                     date_filter=analysis_date or None,
-                    checkpoint_override=checkpoint or None,
+                    checkpoint=checkpoint or None,
                     mode=mode,
                     lob_filter=lob_filter or None,
                 )
