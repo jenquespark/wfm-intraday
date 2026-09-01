@@ -1,8 +1,7 @@
-"""Canonical WFM data models — the internal schema used by the engine.
+"""Canonical domain models for the WFM Reforecast Engine.
 
-Every input adapter translates source data into these models.
-Every calculation operates on these models.
-Every output reporter formats these models.
+Every typed data object is defined ONCE here.  The module reforecast.models
+now re-exports from this module for backward compatibility.
 """
 
 from __future__ import annotations
@@ -11,33 +10,16 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
-@dataclass(frozen=True)
-class IntervalRecord:
-    """A single interval's data for one (date, LOB, channel).
-
-    ``scheduled_fte`` is None when no schedule input was provided.
-    ``actual_volume`` and ``actual_aht_seconds`` may be None for
-    future intervals in an as-of analysis.
-    """
-
-    date: str
-    interval_start: str
-    lob: str
-    channel: str
-    forecast_volume: float
-    forecast_aht_seconds: float
-    actual_volume: Optional[float] = None
-    actual_aht_seconds: Optional[float] = None
-    reforecast_volume: Optional[float] = None
-    scheduled_fte: Optional[float] = None
+# ── Core staffing types ────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class StaffingRequirement:
     """Staffing required for one interval, split into net and gross.
 
-    * net   = agents actively handling contacts (Erlang C result)
-    * gross = net uplifted for shrinkage:  gross = net / (1 - shrinkage_pct)
+    * net   = agents actively handling contacts (Erlang C result for voice,
+              concurrency-aware for chat, workload for async).
+    * gross = net uplifted for shrinkage:  gross = net / (1 - shrinkage_pct).
     """
 
     net_fte: float
@@ -50,7 +32,16 @@ class StaffingRequirement:
 
 @dataclass(frozen=True)
 class StaffingGap:
-    """Comparison between required and scheduled staffing for one interval."""
+    """Comparison between required and scheduled staffing for one interval.
+
+    ``gap_fte`` is defined as::
+
+        gap_fte = actual_required_gross_fte - scheduled_fte
+
+    * positive  -> understaffed (shortage)
+    * negative  -> overstaffed  (surplus)
+    * ``scheduled_fte`` is None when no schedule input was supplied.
+    """
 
     date: str
     interval_start: str
@@ -60,19 +51,21 @@ class StaffingGap:
     forecast_required_gross_fte: Optional[float] = None
     actual_required_net_fte: Optional[float] = None
     actual_required_gross_fte: Optional[float] = None
+    reforecast_required_net_fte: Optional[float] = None
+    reforecast_required_gross_fte: Optional[float] = None
     scheduled_fte: Optional[float] = None
-    gap_fte: Optional[float] = None
-    status: str = "no_schedule"  # understaffed / overstaffed / balanced / no_schedule
+    gap_fte: Optional[float] = None  # None when no schedule input
+    status: str = "no_schedule"      # understaffed / overstaffed / balanced / no_schedule
 
 
 @dataclass(frozen=True)
 class AccuracyMetrics:
-    """Forecast accuracy for a LOB or overall.
+    """Forecast accuracy metrics.
 
-    Conventions:
-        * WAPE = sum(|actual - forecast|) / sum(actual) * 100
-        * MAPE = mean(|actual - forecast| / actual) * 100
-        * bias = sum(actual - forecast) / sum(actual)
+    Conventions (actual demand as denominator):
+    * WAPE = sum(|actual - forecast|) / sum(actual) * 100
+    * MAPE = mean(|actual - forecast| / actual) * 100
+    * bias = sum(actual - forecast) / sum(actual)
     """
 
     wape: float
@@ -84,9 +77,16 @@ class AccuracyMetrics:
         return self.wape / 100.0
 
 
+# ── Reforecast ─────────────────────────────────────────────────────────────
+
+
 @dataclass(frozen=True)
 class ReforecastResult:
-    """Intra-day reforecast for one (date, LOB, channel)."""
+    """Intra-day reforecast for one (date, LOB, channel).
+
+    ``checkpoint_interval`` is an interval index within a single operating
+    day, never a position in a multi-day dataset.
+    """
 
     date: str
     lob: str
@@ -94,13 +94,20 @@ class ReforecastResult:
     checkpoint_interval: int
     deviation_pct: float
     scale_factor: float
+    blend_factor: float
     original_forecast: List[float]
     adjusted_forecast: List[float]
 
 
+# ── Redistribution ─────────────────────────────────────────────────────────
+
+
 @dataclass(frozen=True)
 class RedistributionRecommendation:
-    """Advisory capacity move between two intervals on the same day/LOB/channel."""
+    """Advisory capacity move between two intervals.
+
+    This is a CAPACITY recommendation, not an executable agent schedule.
+    """
 
     date: str
     lob: str
@@ -111,6 +118,9 @@ class RedistributionRecommendation:
     recommended_transfer_hours: float
     donor_remaining_surplus_fte: float
     rationale: str
+
+
+# ── Reconciliation ─────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -130,12 +140,46 @@ class ReconciliationReport:
         return bool(self.forecast_only or self.actual_only or self.schedule_only)
 
 
+# ── Interval record ────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class IntervalRecord:
+    """All computed values for one interval.
+
+    ``scheduled_fte`` is None when no schedule input was provided.
+    ``actual_volume`` and ``actual_aht_seconds`` are None for future
+    intervals in an as-of analysis.
+    """
+
+    date: str
+    interval_start: str
+    lob: str
+    channel: str
+    forecast_volume: float
+    forecast_aht_seconds: float
+    actual_volume: Optional[float] = None
+    actual_aht_seconds: Optional[float] = None
+    reforecast_volume: Optional[float] = None
+    forecast_required_net_fte: Optional[float] = None
+    forecast_required_gross_fte: Optional[float] = None
+    actual_required_net_fte: Optional[float] = None
+    actual_required_gross_fte: Optional[float] = None
+    reforecast_required_net_fte: Optional[float] = None
+    reforecast_required_gross_fte: Optional[float] = None
+    scheduled_fte: Optional[float] = None
+    staffing_gap_fte: Optional[float] = None
+
+
+# ── Complete analysis result ───────────────────────────────────────────────
+
+
 @dataclass
 class AnalysisResult:
     """Complete result of a WFM analysis run.
 
     This is the single canonical result object consumed by all reporters
-    (CLI, Excel, CSV, JSON, web UI).
+    (CLI, Excel, CSV, JSON, web UI).  No reporter may recompute values.
     """
 
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -148,7 +192,7 @@ class AnalysisResult:
     warnings: List[str] = field(default_factory=list)
 
 
-# Canonical column schemas -------------------------------------------------
+# ── Column schemas ─────────────────────────────────────────────────────────
 
 BASE_KEY_COLUMNS: List[str] = ["date", "lob", "interval_start", "channel"]
 

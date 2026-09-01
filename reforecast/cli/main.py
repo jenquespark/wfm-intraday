@@ -132,7 +132,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             config_obj=config,
             lob_filter=args.lob,
             date_filter=args.date,
-            checkpoint_override=args.checkpoint,
+            checkpoint=args.checkpoint,
             mode=args.mode,
         )
     except (FileNotFoundError, ValueError) as e:

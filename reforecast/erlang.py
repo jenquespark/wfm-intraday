@@ -1,24 +1,10 @@
-"""Erlang C queueing model for contact centre staffing.
+"""Channel staffing models for contact centre workload.
 
-This module provides a self-contained, numerically stable Erlang C
-implementation that depends only on the Python standard library (``math``).
+voice / Erlang C  — queueing model with service-level constraint.
+chat              — concurrency-aware throughput model.
+async / back-office — workload/capacity model (EXPERIMENTAL in v0.2).
 
-The Erlang C formula gives the probability that an arriving call must wait
-in the queue.  The service-level approximation used here is the standard
-exponential tail approximation:
-
-    P(wait > t) = Pw · exp(-(N − E) · t / AHT)
-
-where:
-
-    Pw   = Erlang C probability of waiting (all agents busy)
-    N    = number of agents
-    E    = offered load (Erlangs)
-    AHT  = average handle time
-    t    = service-level threshold
-
-Reference:  Borst, Mandelbaum, & Reiman (2004) "Dimensioning Large Call
-Centers" — Operations Research 52(1), 17–34.
+All implementations depend only on the Python standard library (``math``).
 """
 
 from __future__ import annotations
@@ -30,18 +16,16 @@ from typing import Dict
 logger = logging.getLogger(__name__)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Erlang B / C  (voice)
+# ════════════════════════════════════════════════════════════════════════════
+
+
 def _erlang_b(offered_load: float, positions: int) -> float:
     """Recursive Erlang B formula (loss probability).
 
-    ``B(E, 0) = 1``
-    ``B(E, n) = E · B(E, n-1) / (E · B(E, n-1) + n)``
-
-    Args:
-        offered_load: Traffic intensity in Erlangs (>= 0).
-        positions:    Number of servers / agents.
-
-    Returns:
-        Probability that all servers are busy (blocking probability).
+    B(E, 0) = 1
+    B(E, n) = E · B(E, n−1) / (E · B(E, n−1) + n)
     """
     if offered_load < 0 or positions < 0:
         raise ValueError(
@@ -61,26 +45,16 @@ def _erlang_b(offered_load: float, positions: int) -> float:
 def erlang_c_pw(offered_load: float, positions: int) -> float:
     """Erlang C probability of waiting (all agents busy).
 
-    Uses the standard conversion from Erlang B:
+    C(E, N) = N · B(E, N) / (N − E · (1 − B(E, N)))
 
-        C(E, N) = N · B(E, N) / (N − E · (1 − B(E, N)))
-
-    When ``N <= E`` the system is unstable; the function returns 1.0
-    (certainty of waiting).
-
-    Args:
-        offered_load: Traffic intensity in Erlangs.
-        positions:    Number of agents.
-
-    Returns:
-        Probability that a call waits, in [0, 1].
+    When N <= E the system is unstable; returns 1.0.
     """
     if positions <= 0:
         return 1.0
     if offered_load <= 0:
         return 0.0
     if positions <= offered_load:
-        return 1.0  # unstable — will always wait
+        return 1.0
 
     eb = _erlang_b(offered_load, positions)
     denom = positions - offered_load * (1.0 - eb)
@@ -95,23 +69,14 @@ def service_level_probability(
     aht_seconds: float,
     threshold_seconds: float,
 ) -> float:
-    """Exponential-tail approximation of ``P(wait <= threshold)``.
+    """Exponential-tail approximation: P(wait <= t).
 
-    ``P(wait <= t) = 1 − Pw · exp(−(N − E) · t / AHT)``
-
-    Args:
-        offered_load: Traffic intensity in Erlangs.
-        positions:    Number of agents.
-        aht_seconds:  Average handle time in seconds.
-        threshold_seconds: Service-level threshold in seconds.
-
-    Returns:
-        Probability that wait time is within the threshold, in [0, 1].
+    P(wait <= t) = 1 − Pw · exp(−(N − E) · t / AHT)
     """
     if positions <= 0 or offered_load <= 0:
         return 1.0 if offered_load <= 0 else 0.0
     if positions <= offered_load:
-        return 0.0  # unstable
+        return 0.0
     if aht_seconds <= 0:
         return 1.0
 
@@ -130,29 +95,11 @@ def required_positions(
     max_occupancy: float = 0.85,
     max_search: int = 300,
 ) -> Dict[str, float]:
-    """Find the minimum number of agents needed to meet a service-level target.
-
-    The search iterates N upward from the offered load until the target
-    service level is reached or the occupancy ceiling is breached.
-
-    Args:
-        calls_per_interval: Number of calls arriving in the interval.
-        aht_seconds:        Average handle time (seconds).
-        interval_seconds:   Length of the interval (seconds).
-        service_level_target:  Target fraction of calls answered within
-            ``sl_threshold_seconds`` (default 0.80).
-        sl_threshold_seconds:  Service-level threshold in seconds (default 20).
-        max_occupancy:          Maximum agent occupancy (default 0.85).
-            N is increased whenever occupancy exceeds this value.
-        max_search:             Maximum positions to search (default 300).
+    """Find minimum agents needed to meet a service-level target (voice/Erlang C).
 
     Returns:
-        Dict with keys:
-            * ``required_positions``  — minimum agents meeting SL target.
-            * ``occupancy``           — achieved occupancy at that level.
-            * ``service_level_achieved`` — achieved service level.
-            * ``constrained_by_occupancy`` — True if the occupancy cap was
-              the binding constraint.
+        Dict with ``required_positions``, ``occupancy``,
+        ``service_level_achieved``, ``constrained_by_occupancy``.
     """
     if calls_per_interval <= 0 or aht_seconds <= 0:
         return {
@@ -163,8 +110,6 @@ def required_positions(
         }
 
     offered_load = (calls_per_interval * aht_seconds) / interval_seconds
-
-    # Lower bound: at least offered_load + 1, rounded up
     min_n = max(1, int(math.floor(offered_load + 1)))
     max_n = min_n + max_search
 
@@ -175,7 +120,7 @@ def required_positions(
     for n in range(min_n, max_n + 1):
         occ = offered_load / n
         if occ > max_occupancy:
-            continue  # occupancy cap — need more agents
+            continue
 
         sl = service_level_probability(
             offered_load=offered_load,
@@ -188,7 +133,6 @@ def required_positions(
 
         if sl >= service_level_target:
             break
-
         if n == max_n:
             constrained = True
 
@@ -198,8 +142,15 @@ def required_positions(
         "required_positions": float(best_n),
         "occupancy": float(achieved_occupancy),
         "service_level_achieved": float(max(0.0, min(1.0, best_sl))),
-        "constrained_by_occupancy": bool(constrained or achieved_occupancy > max_occupancy),
+        "constrained_by_occupancy": bool(
+            constrained or achieved_occupancy > max_occupancy
+        ),
     }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Chat (concurrency-aware)
+# ════════════════════════════════════════════════════════════════════════════
 
 
 def chat_required_positions(
@@ -211,36 +162,27 @@ def chat_required_positions(
 ) -> Dict[str, float]:
     """Estimate chat staffing using a concurrency model.
 
-    Chat differs from voice because one agent can handle multiple chats
-    simultaneously.  The simple model used here is:
+    One agent handles multiple chats simultaneously.  The model:
 
-        required_agents = ceil(offered_concurrent_load / occupancy_target)
+        effective_load = (chats * aht) / interval_seconds / concurrency
+        required = ceil(effective_load / occupancy_target)
 
-    where::
+    This is deliberately simpler than Erlang C — chat queueing behaviour
+    differs from voice because agents work on multiple sessions in parallel.
 
-        offered_concurrent_load = (chats_per_interval * aht_seconds)
-                                  / interval_seconds
-                                  / concurrency
-
-    This is deliberately simpler than Erlang C for voice because chat
-    queueing behaviour is fundamentally different (parallel sessions).
-
-    Args:
-        chats_per_interval: Number of chats arriving in the interval.
-        aht_seconds:        Average chat handling time (seconds).
-        interval_seconds:   Interval length (seconds).
-        concurrency:        Number of simultaneous chats per agent.
-        occupancy_target:   Target occupancy fraction.
-
-    Returns:
-        Dict with keys ``required_positions`` and ``occupancy``.
+    Limitations:
+        Does not model chat abandon rate, response-time targets, or
+        customer wait-time distributions.  Suitable for capacity estimation,
+        not for chat-specific SLA guarantees.
     """
     if chats_per_interval <= 0 or aht_seconds <= 0:
         return {"required_positions": 0.0, "occupancy": 0.0}
 
     raw_load = (chats_per_interval * aht_seconds) / interval_seconds
     effective_load = raw_load / concurrency
-    required = math.ceil(effective_load / occupancy_target) if effective_load > 0 else 0
+    required = (
+        math.ceil(effective_load / occupancy_target) if effective_load > 0 else 0
+    )
     occupancy = effective_load / required if required > 0 else 0.0
 
     return {
@@ -249,38 +191,45 @@ def chat_required_positions(
     }
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Async / back-office  (EXPERIMENTAL — disabled by default in v0.2)
+# ════════════════════════════════════════════════════════════════════════════
+
+
 def async_required_positions(
     items_per_interval: float,
     aht_seconds: float,
     service_hours_per_day: float,
-    sla_business_days: float,
+    sla_business_days: float,  # reserved for future use
 ) -> Dict[str, float]:
-    """Estimate back-office / async staffing using a workload model.
+    """Estimate back-office staffing using a workload model.
 
-    Back-office work (email, processing) is not queueing in the Erlang
-    sense — it is a throughput / capacity calculation:
+    **EXPERIMENTAL in v0.2.**  The current implementation treats
+    *items_per_interval* as a daily volume and applies a simple staffing
+    ratio.  This is NOT correct for interval-level WFM analysis where each
+    interval represents 15–30 minutes of data.
 
-        required_agents = ceil(volume_per_day * AHT / service_hours_per_day)
+    The function is kept for backward compatibility but callers should
+    prefer voice or chat models.  Async channel support is planned for a
+    future release.
 
-    The SLA window is expressed in business days and serves as a factual
-    statement about the service expectation, not a queueing target.
-
-    Args:
-        items_per_interval: Items arriving in the interval.
-        aht_seconds:        Average handling time per item (seconds).
-        service_hours_per_day: Productive hours available per agent per day.
-        sla_business_days:  Target processing window in business days.
-
-    Returns:
-        Dict with keys ``required_positions`` and ``occupancy``.
+    If you need to use this function, understand the limitation: it divides
+    *items_per_interval* by daily capacity, which conflates interval-level
+    and daily-level concepts.  For correct interval-level staffing, multiply
+    the item count to reflect the full day first.
     """
     if items_per_interval <= 0 or aht_seconds <= 0:
         return {"required_positions": 0.0, "occupancy": 0.0}
 
-    daily_volume = items_per_interval  # assumes interval is the unit of analysis
-    daily_capacity = service_hours_per_day * 3600  # seconds
+    # WARNING: items_per_interval is treated as daily volume — this is
+    # incorrect for interval-level analysis.  See docstring above.
+    daily_volume = items_per_interval
+    daily_capacity = service_hours_per_day * 3600.0
     required = math.ceil(daily_volume * aht_seconds / daily_capacity)
-    occupancy = (daily_volume * aht_seconds) / (required * daily_capacity) if required > 0 else 0.0
+    occupancy = (
+        (daily_volume * aht_seconds) / (required * daily_capacity)
+        if required > 0 else 0.0
+    )
 
     return {
         "required_positions": float(required),

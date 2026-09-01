@@ -10,9 +10,9 @@ from reforecast.calculator import (
     calculate_staffing_gap,
     calculate_redistribution,
     calculate_reforecast,
-    _reconcile_keys,
 )
-from reforecast.models import StaffingGap, ReconciliationReport
+from reforecast.validation.inputs import reconcile_keys as _reconcile_keys
+from reforecast.models import StaffingGap
 
 
 # ---------- compile_staffing_requirement ----------
