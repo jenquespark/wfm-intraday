@@ -3,7 +3,7 @@
 Interval-level forecast vs actual gap analysis and intra-day reforecasting
 for contact centre workforce management teams.  The tool reads exported CSV
 data and produces staffing gap analysis, redistribution recommendations,
-and reforecast projections — no live WFM system access required.
+and reforecast projections.
 
 ## What it does
 
