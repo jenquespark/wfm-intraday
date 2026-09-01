@@ -1,184 +1,242 @@
 # WFM Reforecast Engine
 
-> **Interval-level forecast vs actual gap analysis and reforecasting tool for contact center workforce management teams.**
+Compares forecast and actual contact volume at interval level, recalculates
+staffing requirements as the day develops, and identifies gaps between what
+was planned and what was actually needed.
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+Works from exported operational data — no live WFM platform integration, no
+API credentials, no real-time access.  You give it CSVs; it gives you
+numbers.
 
-## Business Problem
+---
 
-Contact center WFM teams publish a weekly forecast that drives scheduling. When actual call volume deviates from the forecast — and it always does — analysts must quickly determine:
+## What it does
 
-- **Which intervals are overstaffed or understaffed?**
-- **How accurate was the forecast?** (WAPE, MAPE, forecast bias)
-- **Where to redistribute flexible hours to close the gap?**
-- **What if call volume continues at its current pace?** (intra-day reforecast)
+- **Forecast accuracy** — WAPE, MAPE, and bias, per LOB and overall.
+- **Staffing requirements** — net and gross FTE from forecast volume and
+  from actual volume, using the appropriate model per channel (Erlang C for
+  voice, concurrency-aware for chat, workload-based for async).
+- **Staffing gaps** — comparing required FTE against an explicit schedule
+  input.  If you don't provide a schedule, it reports that gap analysis is
+  unavailable rather than inventing scheduled FTE from forecast data.
+- **Advisory redistribution** — recommends moving capacity from overstaffed
+  to understaffed intervals on the same day, same LOB, same channel, within
+  a configurable time window.  Recommendations are capacity-level, not
+  agent-level, and donor surplus is tracked so it cannot be double-counted.
+- **Intra-day reforecast** — at a configurable checkpoint, scales remaining
+  interval forecasts by the observed deviation.  Each (date, LOB, channel)
+  is computed independently — Monday's deviation does not touch Tuesday.
+- **Multi-channel support** — voice (Erlang C), chat (concurrency-aware),
+  async/back-office (workload model).  Each channel uses a staffing model
+  appropriate to its queueing behaviour.
 
-This tool answers those questions from exported CSV data — no live system access required.
+## What it doesn't do
 
-## What It Does
+- Does not connect to WFM platforms, ACDs, or any live system.
+- Does not generate agent-level schedules (redistribution is advisory).
+- Does not solve multi-skill scheduling optimisation.
+- Does not claim COPC or any other certification.
+- Voice and async channels are not interchangeable — the tool uses the
+  calculation you configure, not the same one for everything.
 
-- **Forecast accuracy analysis** — WAPE, MAPE, and forecast bias per LOB and overall
-- **Erlang C staffing gap detection** — required vs scheduled FTE per interval per LOB
-- **Redistribution recommendations** — move flexible hours from overstaffed to understaffed intervals
-- **Intra-day reforecast** — at a configurable checkpoint, scale remaining intervals based on actuals-to-date
-- **Multi-LOB support** — analyze inbound calls, email, chat, or any contact type simultaneously
-- **Export** — Excel report, redistribution plan CSV, accuracy summary JSON, optional matplotlib charts
+---
 
-## Quick Start
+## Input
 
-### Prerequisites
+Three CSV files, two required and one optional:
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install pandas numpy openpyxl pyyaml matplotlib
+### forecast.csv (required)
+
+```csv
+date,lob,interval_start,channel,forecast_volume,forecast_aht_seconds
+2026-05-04,inbound_calls,08:00,voice,45.2,280
+2026-05-04,chat_support,08:00,chat,18.5,120
 ```
 
-### Generate Sample Data
+### actuals.csv (required)
+
+```csv
+date,lob,interval_start,channel,actual_volume,actual_aht_seconds
+2026-05-04,inbound_calls,08:00,voice,42.1,285
+2026-05-04,chat_support,08:00,chat,20.3,115
+```
+
+### schedule.csv (optional)
+
+```csv
+date,lob,interval_start,channel,scheduled_fte
+2026-05-04,inbound_calls,08:00,voice,14.5
+```
+
+When a schedule file is provided, the tool compares required FTE against
+scheduled FTE and classifies each interval as understaffed, overstaffed, or
+balanced.  Without it, gap analysis is reported as unavailable.
+
+---
+
+## Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+For charts (optional):
+
+```bash
+pip install matplotlib
+```
+
+## Usage
+
+Generate sample data (5 weeks, 3 LOBs, 2 channels):
 
 ```bash
 python scripts/generate_sample_data.py
 ```
 
-This creates 5 weeks of realistic synthetic data for 3 LOBs (inbound_calls, email, chat) in `data/`.
-
-### Run Analysis
+Run analysis:
 
 ```bash
 python reforecast.py --forecast data/forecast.csv --actuals data/actuals.csv
 ```
 
-Or analyze a single LOB:
+With schedule data:
 
 ```bash
-python reforecast.py --forecast data/forecast.csv --actuals data/actuals.csv --lob inbound_calls
+python reforecast.py --forecast data/forecast.csv --actuals data/actuals.csv \
+    --schedule data/schedule.csv
 ```
 
-Generate charts:
+Single LOB:
 
 ```bash
-python reforecast.py --forecast data/forecast.csv --actuals data/actuals.csv --charts
+python reforecast.py --forecast data/forecast.csv --actuals data/actuals.csv \
+    --lob inbound_calls
 ```
 
-### Output
+With charts:
 
-| File | Description |
-|------|-------------|
-| `output/reforecast_report.xlsx` | Multi-sheet Excel: one sheet per LOB + Summary |
-| `output/redistribution_plan.csv` | Advisory hour redistribution recommendations |
-| `output/accuracy_summary.json` | Machine-readable accuracy metrics |
-| `output/forecast_vs_actual_*.png` | Forecast vs actual charts (when `--charts` flag used) |
+```bash
+python reforecast.py --forecast data/forecast.csv --actuals data/actuals.csv \
+    --chart
+```
 
-### Sample Terminal Output
+---
+
+## Output
+
+| File | Contents |
+|------|----------|
+| `output/reforecast_report.xlsx` | Per-LOB interval data, accuracy summary, staffing gaps, redistribution recommendations |
+| `output/redistribution_plan.csv` | Advisory capacity moves |
+| `output/accuracy_summary.json` | WAPE, MAPE, bias per LOB and overall |
+| `output/forecast_vs_actual_*.png` | Volume charts (when `--charts` is used) |
+
+Example terminal output:
 
 ```
 📊 FORECAST ACCURACY
-  inbound_calls    WAPE:   9.95%  MAPE:  10.28%  Bias: +0.0024
-  email            WAPE:  12.37%  MAPE:  13.35%  Bias: -0.0100
-  chat             WAPE:   8.37%  MAPE:   8.48%  Bias: -0.0022
-  OVERALL          WAPE:   9.90%  MAPE:  10.70%  Bias: -0.0006
-
-📋 STAFFING GAP ANALYSIS
-  Understaffed intervals:  651
-  Overstaffed intervals:   403
-  Balanced intervals:      2201
-  Redistribution moves:    691
-
-🔄 REFORECAST CHECKPOINT
-  Checkpoint=10, blend=50%
-  Original forecast total: 2033486 → Adjusted total: 2003816
+  inbound_calls     WAPE:   9.95%  MAPE:  10.28%  Bias: +0.0024
+  chat_support      WAPE:   8.37%  MAPE:   8.48%  Bias: -0.0022
+  email_backlog     WAPE:  12.37%  MAPE:  13.35%  Bias: -0.0100
+  OVERALL           WAPE:   9.90%  MAPE:  10.70%  Bias: -0.0006
 ```
 
-## Input Format
+---
 
-### Forecast CSV
+## FTE terminology
 
-```csv
-date,lob,interval_start,forecast_volume,forecast_aht
-2026-05-04,inbound_calls,08:00,45.2,280
-```
+| Term | Meaning |
+|------|---------|
+| **Net FTE** | Agents actively handling contacts (Erlang C result for voice) |
+| **Gross FTE** | Net FTE uplifted for shrinkage: `net / (1 - shrinkage_pct)` |
+| **Forecast required FTE** | Staffing needed based on forecast volume |
+| **Actual required FTE** | Staffing needed based on actual volume |
+| **Scheduled FTE** | Staffing actually planned (from schedule input, never derived) |
+| **Gap FTE** | `actual_required_gross - scheduled` (positive = understaffed) |
 
-### Actuals CSV
-
-```csv
-date,lob,interval_start,actual_volume,actual_aht
-2026-05-04,inbound_calls,08:00,42.1,285
-```
-
-Both files must have the same date/LOB/interval_start combinations.
+---
 
 ## Configuration
 
-Edit `config.yaml`:
+Parameters are in `config.yaml`.  The defaults suit a 30-minute interval,
+80/20 service level, 34 % shrinkage, and 85 % max occupancy.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `interval_length` | 30 | Interval length in minutes |
-| `aht_seconds` | 270 | Average handle time in seconds |
-| `shrinkage_pct` | 0.34 | Shrinkage factor (breaks, training, PTO) |
-| `service_level` | 0.80 | Service level target (80/20) |
-| `sl_threshold_seconds` | 20 | Service level answer threshold |
-| `max_occupancy` | 0.85 | Maximum agent occupancy |
-| `overstaff_threshold_pct` | 0.15 | Threshold for overstaffed classification |
-| `understaff_threshold_pct` | 0.10 | Threshold for understaffed classification |
-| `reforecast_checkpoint_interval` | 10 | Interval index for reforecast checkpoint |
-| `reforecast_blend_factor` | 0.50 | How much deviation persists (0–1) |
+Key parameters:
 
-## Methodology
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `interval_length_minutes` | 30 | |
+| `aht_seconds` | 270 | Fallback when per-row AHT is missing |
+| `shrinkage_pct` | 0.34 | Must be < 1 |
+| `service_level` | 0.80 | Voice only |
+| `max_occupancy` | 0.85 | Voice only |
+| `chat_concurrency` | 3 | Chats per agent simultaneously |
+| `reforecast_checkpoint_interval` | 10 | Interval index where scaling starts |
+| `reforecast_blend_factor` | 0.50 | How much deviation persists |
 
-### Erlang C
+---
 
-Uses the standard exponential approximation for service level:
+## Channel models
 
-```
-P(wait > t) = Pw × exp(-(N - E) × t / AHT)
-```
+### Voice
 
-Positions are iterated upward until the service level target is met, with an occupancy ceiling. No external queueing library required — implemented in pure Python without scipy.
+Uses Erlang C with the exponential tail approximation.  Service level is
+calculated as `P(wait <= threshold)`.  Positions are searched upward until
+the target is met, capped by maximum occupancy.
 
-### Forecast Accuracy
+### Chat
 
-| Metric | Formula | Interpretation |
-|--------|---------|----------------|
-| **WAPE** | Σ\|A-F\| / ΣA × 100 | Weighted Absolute Percentage Error (volume-weighted) |
-| **MAPE** | mean( \|A-F\| / A ) × 100 | Mean Absolute Percentage Error (per-interval) |
-| **Bias** | Σ(A-F) / ΣA | Positive = underforecast, Negative = overforecast |
+Uses a concurrency model: `required_agents = ceil(load / concurrency /
+occupancy_target)`.  One agent can handle multiple simultaneous chats, so
+Erlang C would overstate the requirement.
 
-### Reforecasting
+### Async (email, back-office)
 
-At the configurable checkpoint interval, the cumulative deviation is calculated:
+Uses a workload / throughput model: `required_agents = ceil(volume * AHT /
+daily_capacity)`.  There is no queueing in the Erlang sense — the question
+is whether the team has enough processing capacity.
+
+---
+
+## Reforecast methodology
+
+At the checkpoint interval, the cumulative deviation is:
 
 ```
 deviation_pct = (cumulative_actual - cumulative_forecast) / cumulative_forecast
-scale = 1 + blend_factor × deviation_pct
-adjusted_forecast[i] = forecast[i] × scale  (for i >= checkpoint)
+scale = 1 + blend_factor * deviation_pct
+adjusted_forecast[i] = forecast[i] * scale   (for i >= checkpoint)
 ```
 
-## WFM Context
+Each (date, LOB, channel) is processed independently.  A deviation on Monday
+never rescales Tuesday.
 
-This tool targets the real reforecasting workflow that WFM teams face daily. The methodology aligns with COPC WFM standards and is vendor-agnostic — it works with data exported from NICE IEX, Teleopti, Verint, Calabrio, or any platform that exports interval-level forecast and actual data.
+---
 
-**What this is NOT:**
-- NOT a full WFM platform replacement
-- NOT connected to live ACD or WFM systems
-- NOT a scheduling optimizer (redistribution is advisory)
+## Redistribution
 
-**What this IS:**
-- A portable, transparent WFM gap analysis tool
-- An offline reforecasting engine for weekly planning
-- A methodology reference for interval-level WFM analysis
+Redistribution recommendations are advisory.  They suggest moving capacity
+from overstaffed to understaffed intervals on the same date, same LOB, same
+channel, within a configurable time window.  Donor surplus is tracked and
+consumed — one interval's surplus cannot be allocated to more recipients
+than it can cover.
 
-## Limitations
+---
 
-- Requires exported CSV data with the specified column schema
-- Erlang C assumes single-skill, single-queue (does not model multi-skill routing)
-- Redistribution recommendations are heuristic-based, not optimization-solved
-- All sample data is synthetic and labeled as such
-- No real-time/live system connections
+## Development
+
+```bash
+pip install -e ".[dev]"
+python -m pytest
+```
+
+---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+MIT.  See `LICENSE`.
 
-Copyright (c) 2026 Cenk Yigitoglu, [Onpoint.Works](https://www.onpoint.works)
+Copyright (c) 2026 Cenk Yigitoglu, Onpoint.Works.

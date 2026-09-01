@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Generate synthetic contact center data for WFM Reforecast Engine testing.
+"""Generate synthetic contact centre data for testing the WFM Reforecast Engine.
 
 Outputs:
-    data/forecast.csv — 5 weeks of interval-level forecasts for 3 LOBs
-    data/actuals.csv  — 5 weeks of interval-level actuals with realistic deviations
+    data/forecast.csv   — interval-level forecasts for 3 LOBs × 2 channels
+    data/actuals.csv    — interval-level actuals with realistic deviations
+    data/schedule.csv   — scheduled staffing (computed from forecast requirement)
 
-All data is synthetic and clearly labeled as such.
+All data is synthetic and labelled as such.  No real customer data is used.
 """
 
 from __future__ import annotations
@@ -20,28 +21,28 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Configuration
 WEEKS = 5
 INTERVAL_MINUTES = 30
-INTERVALS_PER_DAY = 30  # 08:00 to 23:00
+INTERVALS_PER_DAY = 30  # 08:00–23:00
+
 LOB_CONFIG = {
     "inbound_calls": {
+        "channel": "voice",
         "base_daily_volume": 1200,
         "aht": 280,
         "peak_factor": 1.8,
-        "noise_pct": 0.12,
     },
-    "email": {
-        "base_daily_volume": 400,
-        "aht": 180,
-        "peak_factor": 1.3,
-        "noise_pct": 0.15,
-    },
-    "chat": {
+    "chat_support": {
+        "channel": "chat",
         "base_daily_volume": 600,
         "aht": 120,
         "peak_factor": 1.5,
-        "noise_pct": 0.10,
+    },
+    "email_backlog": {
+        "channel": "async",
+        "base_daily_volume": 400,
+        "aht": 180,
+        "peak_factor": 1.3,
     },
 }
 
@@ -55,45 +56,32 @@ WEEKDAY_FACTORS = {
     "Sunday": 0.40,
 }
 
-# Intraday profile: typical 30-min interval multipliers (08:00-23:00, 30 intervals)
 INTRADAY_PROFILE = [
-    0.30, 0.40, 0.55, 0.65, 0.75, 0.85,  # 08:00-10:30
-    0.95, 1.15, 1.30, 1.40, 1.45, 1.50,  # 10:30-13:00
-    1.45, 1.40, 1.35, 1.30, 1.25, 1.20,  # 13:00-15:30
-    1.15, 1.10, 1.05, 1.00, 0.95, 0.90,  # 15:30-18:00
-    0.80, 0.70, 0.60, 0.50, 0.45, 0.40,  # 18:00-20:30
-    0.35, 0.30, 0.25, 0.20,              # 20:30-22:30 (partial)
+    0.30, 0.40, 0.55, 0.65, 0.75, 0.85,
+    0.95, 1.15, 1.30, 1.40, 1.45, 1.50,
+    1.45, 1.40, 1.35, 1.30, 1.25, 1.20,
+    1.15, 1.10, 1.05, 1.00, 0.95, 0.90,
+    0.80, 0.70, 0.60, 0.50, 0.45, 0.40,
 ]
 
 
 def generate_dates() -> List[pd.Timestamp]:
-    """Generate 5 weeks of dates (Mon-Sun, starting Monday)."""
-    start = pd.Timestamp("2026-05-04")  # A Monday
+    """Five weeks starting Monday."""
+    start = pd.Timestamp("2026-05-04")
     return [start + pd.Timedelta(days=i) for i in range(WEEKS * 7)]
 
 
 def generate_interval_times() -> List[str]:
-    """Generate interval_start strings (HH:MM format)."""
-    start_hour = 8
-    end_hour = 23
+    """08:00–23:00 at 30-minute intervals."""
     times: List[str] = []
-    hour = start_hour
-    minute = 0
-    while hour < end_hour or (hour == end_hour and minute == 0):
-        times.append(f"{hour:02d}:{minute:02d}")
-        minute += INTERVAL_MINUTES
-        if minute >= 60:
-            hour += 1
-            minute = 0
+    for hour in range(8, 23):
+        for minute in (0, 30):
+            times.append(f"{hour:02d}:{minute:02d}")
     return times
 
 
 def generate_synthetic_data(output_dir: str = "data") -> None:
-    """Generate synthetic forecast and actuals CSVs.
-
-    Args:
-        output_dir: Directory to write output files.
-    """
+    """Generate forecast, actuals, and schedule CSVs."""
     os.makedirs(output_dir, exist_ok=True)
 
     dates = generate_dates()
@@ -102,6 +90,7 @@ def generate_synthetic_data(output_dir: str = "data") -> None:
 
     forecast_rows: List[dict] = []
     actuals_rows: List[dict] = []
+    schedule_rows: List[dict] = []
 
     for date in dates:
         weekday = date.day_name()
@@ -110,74 +99,72 @@ def generate_synthetic_data(output_dir: str = "data") -> None:
         for lob_name, lob_cfg in LOB_CONFIG.items():
             base_daily = lob_cfg["base_daily_volume"]
             aht = lob_cfg["aht"]
-            peak = lob_cfg["peak_factor"]
-            noise = lob_cfg["noise_pct"]
-
-            daily_volume = base_daily * weekday_factor * peak
+            channel = lob_cfg["channel"]
+            daily_volume = base_daily * weekday_factor * lob_cfg["peak_factor"]
 
             for i, interval_time in enumerate(interval_times):
-                profile_idx = i % len(INTRADAY_PROFILE)
-                interval_profile = INTRADAY_PROFILE[profile_idx]
+                profile = INTRADAY_PROFILE[i % len(INTRADAY_PROFILE)]
+                n_int = len(interval_times)
+                forecast_volume = max(0.5, round(daily_volume * profile * (n_int / sum(INTRADAY_PROFILE)), 1))
 
-                # Normalize profile multipliers so sum matches daily volume
-                forecast_volume = daily_volume * interval_profile * (len(interval_times) / sum(INTRADAY_PROFILE))
-                forecast_volume = max(0.5, round(forecast_volume, 1))
-
+                # Forecast row
                 forecast_rows.append({
                     "date": date.strftime("%Y-%m-%d"),
                     "lob": lob_name,
                     "interval_start": interval_time,
+                    "channel": channel,
                     "forecast_volume": forecast_volume,
-                    "forecast_aht": aht,
+                    "forecast_aht_seconds": aht,
                 })
 
                 # Actuals: forecast + noise + occasional deviation
-                noise_factor = 1.0 + rng.normal(0, noise)
+                noise = 1.0 + rng.normal(0, 0.12)
                 deviation = 1.0
-
-                # Simulate some intervals where actuals run ahead (10-15% above)
-                # and some where they run behind
                 if i == 5 and lob_name == "inbound_calls" and date.dayofweek < 5:
-                    deviation = 1.15  # Wednesday morning spike
-                elif i == 12 and lob_name == "email":
-                    deviation = 0.85  # Email trough
+                    deviation = 1.15
                 elif rng.random() < 0.05:
                     deviation = 1.0 + rng.uniform(-0.2, 0.2)
 
-                actual_volume = max(0.5, round(forecast_volume * noise_factor * deviation, 1))
+                actual_volume = max(0.5, round(forecast_volume * noise * deviation, 1))
                 actual_aht = max(30, round(aht * (1.0 + rng.normal(0, 0.03))))
 
                 actuals_rows.append({
                     "date": date.strftime("%Y-%m-%d"),
                     "lob": lob_name,
                     "interval_start": interval_time,
+                    "channel": channel,
                     "actual_volume": actual_volume,
-                    "actual_aht": actual_aht,
+                    "actual_aht_seconds": actual_aht,
                 })
 
-    forecast_df = pd.DataFrame(forecast_rows)
-    actuals_df = pd.DataFrame(actuals_rows)
+                # Schedule: forecast requirement + shrinkage (synthetic staffing plan)
+                from reforecast.config import Config
+                from reforecast.calculator import compute_staffing_requirement
+                config = Config()
+                req = compute_staffing_requirement(
+                    volume=forecast_volume,
+                    aht_seconds=aht,
+                    interval_seconds=INTERVAL_MINUTES * 60,
+                    config=config,
+                    channel=channel,
+                )
+                schedule_rows.append({
+                    "date": date.strftime("%Y-%m-%d"),
+                    "lob": lob_name,
+                    "interval_start": interval_time,
+                    "channel": channel,
+                    "scheduled_fte": round(req.gross_fte, 2),
+                })
 
-    forecast_path = os.path.join(output_dir, "forecast.csv")
-    actuals_path = os.path.join(output_dir, "actuals.csv")
+    pd.DataFrame(forecast_rows).to_csv(os.path.join(output_dir, "forecast.csv"), index=False)
+    pd.DataFrame(actuals_rows).to_csv(os.path.join(output_dir, "actuals.csv"), index=False)
+    pd.DataFrame(schedule_rows).to_csv(os.path.join(output_dir, "schedule.csv"), index=False)
 
-    forecast_df.to_csv(forecast_path, index=False)
-    actuals_df.to_csv(actuals_path, index=False)
-
-    logger.info("Synthetic data generated:")
-    logger.info("  Forecast:  %s (%s rows, %s columns)", forecast_path, len(forecast_df), len(forecast_df.columns))
-    logger.info("  Actuals:   %s (%s rows, %s columns)", actuals_path, len(actuals_df), len(actuals_df.columns))
-
+    logger.info("Synthetic data written to %s/", output_dir)
     for lob in LOB_CONFIG:
-        fc = forecast_df[forecast_df["lob"] == lob]
-        ac = actuals_df[actuals_df["lob"] == lob]
-        logger.info(
-            "  %15s: %4d forecast rows, %4d actuals rows, total fcst vol: %8.0f",
-            lob,
-            len(fc),
-            len(ac),
-            fc["forecast_volume"].sum(),
-        )
+        fc = pd.DataFrame(forecast_rows)
+        fc = fc[fc["lob"] == lob]
+        logger.info("  %20s: %4d rows, total forecast volume: %8.0f", lob, len(fc), fc["forecast_volume"].sum())
 
 
 if __name__ == "__main__":

@@ -20,3 +20,7 @@ env/
 *.swo
 *~
 .DS_Store
+.cache/
+streamlit/
+sample_data/
+PLAN.md

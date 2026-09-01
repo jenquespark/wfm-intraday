@@ -1,5 +1,4 @@
-pandas
-numpy
-openpyxl
-pyyaml
-matplotlib
+pandas>=2.0
+numpy>=1.22
+openpyxl>=3.0
+pyyaml>=6.0
