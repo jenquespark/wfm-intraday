@@ -31,7 +31,7 @@ from wfm_intraday.domain.models import (
 from wfm_intraday.metrics import calculate_all, calculate_per_lob
 from wfm_intraday.validation.inputs import (
     reconcile_keys,
-    require_no_mismatch,
+    require_consistent_scope,
     validate_input_files,
 )
 
@@ -50,8 +50,19 @@ def validate(
     column_mapping: dict[str, str] | None = None,
     config_path: str | None = None,
     config_obj: Config | None = None,
+    mode: str = "retrospective",
+    checkpoint: str | None = None,
+    date_filter: str | None = None,
+    lob_filter: str | None = None,
 ) -> ReconciliationReport:
     """Validate input files and return a reconciliation report.
+
+    This is the single strict validation entry point shared by the public API,
+    the CLI, and the web interface.  It loads and validates inputs, then runs
+    checkpoint-aware, scope-aware reconciliation.  A true mismatch — actual-only
+    keys, schedule-only keys, or (retrospectively / for a COMPLETED as-of
+    interval) forecast-only keys — raises ``ValueError``.  It never silently
+    returns a report that should have failed.
 
     Args:
         forecast_path: Path to forecast CSV.
@@ -60,18 +71,57 @@ def validate(
         column_mapping: Optional column name mapping dict (canonical → source).
         config_path: Optional path to config YAML (may carry column_mapping).
         config_obj: Optional Config object (overrides config_path).
+        mode: ``'retrospective'`` or ``'as-of'``.
+        checkpoint: HH:MM checkpoint (required, and strictly validated, for
+            as-of mode).
+        date_filter: Optional YYYY-MM-DD calendar-date scope (validated).
+        lob_filter: Optional LOB scope.
 
     Returns:
         ReconciliationReport with key-matching statistics.
 
     Raises:
         FileNotFoundError: If a required input file is missing.
-        ValueError: If input columns, values, or duplicates are invalid.
+        ValueError: If input columns/values are invalid, arguments (checkpoint,
+            date_filter) are malformed, or reconciliation has a true mismatch.
     """
     config = _load_config(config_obj, config_path)
     mapping = column_mapping if column_mapping is not None else config.column_mapping
     fc_df, ac_df, sd_df, _warns = validate_input_files(
         forecast_path, actuals_path, staffing_path, column_mapping=mapping
+    )
+
+    # Validate request-level arguments identically to analyze().
+    if mode not in _SUPPORTED_MODES:
+        raise ValueError(f"mode must be one of {_SUPPORTED_MODES}, got '{mode}'")
+    if mode == "as-of" and checkpoint is None:
+        raise ValueError("mode='as-of' requires a checkpoint time (HH:MM)")
+    cp_minutes: int | None = None
+    if checkpoint is not None:
+        cp_minutes = _parse_time(checkpoint)
+    if date_filter is not None:
+        _validate_date_filter(date_filter)
+
+    # Scope before reconciling (out-of-scope rows must not create mismatches).
+    if date_filter:
+        fc_df = fc_df[fc_df["date"] == date_filter].copy()
+        ac_df = ac_df[ac_df["date"] == date_filter].copy()
+        if sd_df is not None:
+            sd_df = sd_df[sd_df["date"] == date_filter].copy()
+    if lob_filter:
+        fc_df = fc_df[fc_df["lob"] == lob_filter].copy()
+        ac_df = ac_df[ac_df["lob"] == lob_filter].copy()
+        if sd_df is not None:
+            sd_df = sd_df[sd_df["lob"] == lob_filter].copy()
+
+    # Strict scope-aware reconciliation (raises on any true mismatch).
+    require_consistent_scope(
+        fc_df,
+        ac_df,
+        sd_df,
+        mode=mode,
+        checkpoint_minutes=cp_minutes,
+        interval_length_minutes=config.interval_length_minutes,
     )
     return reconcile_keys(fc_df, ac_df, sd_df)
 
@@ -118,6 +168,17 @@ def analyze(
         raise ValueError(f"mode must be one of {_SUPPORTED_MODES}, got '{mode}'")
     if mode == "as-of" and checkpoint is None:
         raise ValueError("mode='as-of' requires a checkpoint time (HH:MM)")
+    # A provided checkpoint must always be a valid HH:MM, even in
+    # retrospective mode — an invalid checkpoint is a request error, never a
+    # silent empty/successful analysis.
+    checkpoint_minutes: int | None = None
+    if checkpoint is not None:
+        checkpoint_minutes = _parse_time(checkpoint)
+    # date_filter must be a real YYYY-MM-DD calendar date.
+    if date_filter is not None:
+        _validate_date_filter(date_filter)
+    if lob_filter is not None and (not isinstance(lob_filter, str) or not lob_filter.strip()):
+        raise ValueError(f"lob_filter must be a non-empty string, got {lob_filter!r}")
 
     # ── 1. Load config ─────────────────────────────────────────────────
     config = _load_config(config_obj, config_path)
@@ -146,19 +207,26 @@ def analyze(
             sd_df = sd_df[sd_df["lob"] == lob_filter].copy()
 
     # ── 4. Reconcile the SCOPED frames and hard-fail on mismatches ─────
+    # One strict, checkpoint-aware reconciliation contract.  In as-of mode,
+    # forecast-only keys are allowed only for genuinely FUTURE intervals
+    # (end > checkpoint); a completed interval missing an actual hard-fails.
+    require_consistent_scope(
+        fc_df,
+        ac_df,
+        sd_df,
+        mode=mode,
+        checkpoint_minutes=checkpoint_minutes,
+        interval_length_minutes=config.interval_length_minutes,
+    )
+
+    # checkpoint_minutes was resolved (and strictly validated) up front in
+    # step 0.  Completion downstream is key/time based and order-independent.
+
+    # Build the descriptive reconciliation report for the result metadata.
     report = reconcile_keys(fc_df, ac_df, sd_df)
 
-    # Key mismatches hard-fail.  In as-of mode, forecast-only keys are allowed
-    # (future intervals); actual-only keys always fail.
-    require_no_mismatch(report, mode=mode)
-
-    # ── 5. Resolve checkpoint (single authority = the request parameter) ─
-    #    Completion is KEY/TIME based: an interval is completed iff its end
-    #    time (interval_start + interval_length) is <= the checkpoint clock
-    #    time.  There is no positional or modulo masking.
-    checkpoint_minutes: int | None = None
-    if checkpoint is not None:
-        checkpoint_minutes = _parse_time(checkpoint)
+    # ── 5. (reserved) ─────────────────────────────────────────────────
+    #
 
     # ── 6. Merge forecast + actuals (LEFT join => forecast spine preserved) ─
     #    Every forecast interval is retained.  Intervals with no matching
@@ -261,16 +329,64 @@ def _load_config(config_obj: Config | None, config_path: str | None) -> Config:
 
 
 def _parse_time(t: str) -> int:
-    """Parse HH:MM (or HH:MM:SS best-effort) to minutes since midnight."""
-    parts = t.strip().split(":")
-    if len(parts) < 2:
+    """Strictly parse an HH:MM time to minutes since midnight.
+
+    Only ``HH:MM`` with hour in 00–23 and minute in 00–59 is accepted.
+    ``H:MM`` (single-digit hour) is normalized to ``HH:MM`` for convenience.
+    Everything else — malformed strings, ``-1:00``, ``24:00``, ``12:70``,
+    ``99:99``, ``12am`` — raises ``ValueError``.
+    """
+    if not isinstance(t, str):
+        raise ValueError(f"checkpoint must be HH:MM, got {t!r}")
+    s = t.strip()
+    if ":" not in s or s.count(":") != 1:
         raise ValueError(f"checkpoint must be HH:MM, got '{t}'")
-    try:
-        hours = int(parts[0])
-        minutes = int(parts[1])
-    except ValueError:
-        raise ValueError(f"checkpoint must be HH:MM, got '{t}'")
+    hpart, mpart = s.split(":")
+
+    def _to_int(part: str) -> int:
+        if not part.isdigit():
+            raise ValueError(f"checkpoint must be HH:MM, got '{t}'")
+        try:
+            return int(part)
+        except ValueError:
+            raise ValueError(f"checkpoint must be HH:MM, got '{t}'")
+
+    hours = _to_int(hpart)
+    minutes = _to_int(mpart)
+
+    if not 0 <= hours <= 23:
+        raise ValueError(
+            f"checkpoint hour {hours} is outside 00..23 (got '{t}'). "
+            f"Expected a valid HH:MM time."
+        )
+    if not 0 <= minutes <= 59:
+        raise ValueError(
+            f"checkpoint minute {minutes} is outside 00..59 (got '{t}'). "
+            f"Expected a valid HH:MM time."
+        )
     return hours * 60 + minutes
+
+
+def _validate_date_filter(date_filter: str) -> None:
+    """Validate that ``date_filter`` is a real ``YYYY-MM-DD`` calendar date."""
+    from datetime import date as _date
+
+    if not isinstance(date_filter, str):
+        raise ValueError(
+            f"date_filter must be a YYYY-MM-DD calendar date, got {date_filter!r}"
+        )
+    s = date_filter.strip()
+    parts = s.split("-")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        raise ValueError(
+            f"Invalid date_filter '{date_filter}'. Expected format YYYY-MM-DD (e.g. 2026-09-01)."
+        )
+    try:
+        _date.fromisoformat(s)
+    except ValueError:
+        raise ValueError(
+            f"Invalid date_filter '{date_filter}'. Expected a real YYYY-MM-DD calendar date."
+        )
 
 
 def _interval_end_minutes(interval_start: str, config: Config) -> int:

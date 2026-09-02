@@ -15,11 +15,9 @@ import argparse
 import logging
 import os
 import sys
-from typing import Optional
 
 from wfm_intraday import __version__
 from wfm_intraday.domain.models import AnalysisResult
-from wfm_intraday.validation.inputs import reconcile_keys, validate_input_files
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -56,6 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
     # validate
     vp = sub.add_parser("validate", help="Validate input files without running analysis")
     _common_args(vp)
+    vp.add_argument("--mode", default="retrospective", choices=["retrospective", "as-of"])
+    vp.add_argument("--checkpoint", default=None, help="Checkpoint time (HH:MM), for as-of")
+    vp.add_argument("--date", default=None, help="Analysis date (YYYY-MM-DD)")
 
     # analyze
     ap = sub.add_parser("analyze", help="Run full analysis")
@@ -82,53 +83,48 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_validate(args: argparse.Namespace) -> int:
     """Validate input files and print reconciliation report.
 
-    Duplicate keys, key mismatches, NaN/inf/non-numeric values, malformed
-    dates / interval_start, and unsupported channels HARD-FAIL with exit 2.
-    Uses the same config-aware column_mapping service as analyze().
+    Routes through the single strict public ``validate()`` service shared with
+    analyze() and the web interface.  Duplicate keys, true key mismatches,
+    NaN/inf/non-numeric values, malformed dates / interval_start / checkpoint,
+    and unsupported channels HARD-FAIL with exit 2.  Supports as-of mode with a
+    checkpoint (a genuinely future forecast-only interval is valid; a completed
+    interval missing an actual hard-fails).
     """
-    from wfm_intraday.config import Config
-    from wfm_intraday.validation.inputs import require_no_mismatch
-
-    config_path = args.config
-    try:
-        if config_path is None:
-            try:
-                config = Config.from_yaml("config.yaml")
-            except FileNotFoundError:
-                config = Config()
-        else:
-            config = Config.from_yaml(config_path)
-    except FileNotFoundError:
-        print(f"ERROR: Config file not found: {config_path}", file=sys.stderr)
-        return EXIT_CONFIG_ERROR
-    except ValueError as e:
-        print(f"ERROR: Invalid config: {e}", file=sys.stderr)
-        return EXIT_CONFIG_ERROR
+    from wfm_intraday import validate as run_validate
 
     try:
-        fc_df, ac_df, sd_df, warns = validate_input_files(
+        report = run_validate(
             args.forecast,
             args.actuals,
             args.staffing,
-            column_mapping=config.column_mapping,
+            config_path=args.config,
+            mode=args.mode,
+            checkpoint=args.checkpoint,
+            date_filter=args.date,
+            lob_filter=args.lob,
         )
-        report = reconcile_keys(fc_df, ac_df, sd_df)
-        require_no_mismatch(report)
-    except (FileNotFoundError, ValueError) as e:
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return EXIT_INPUT_ERROR
+    except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return EXIT_INPUT_ERROR
 
     print("=== INPUT VALIDATION ===")
     print(f"  Forecast: {report.forecast_rows} rows")
     print(f"  Actuals:  {report.actual_rows} rows")
-    if sd_df is not None:
+    if args.staffing:
         print(f"  Staffing: {report.scheduled_rows} rows")
     else:
         print("  Staffing: not provided")
     print(f"  Matched keys: {report.matched_keys}")
-    if warns:
-        for w in warns:
-            print(f"  WARNING: {w}")
+    print(f"  Mode: {args.mode}")
+    if args.checkpoint:
+        print(f"  Checkpoint: {args.checkpoint}")
+    if args.date:
+        print(f"  Date: {args.date}")
+    if args.lob:
+        print(f"  LOB: {args.lob}")
     print("  Validation: OK")
     return EXIT_SUCCESS
 

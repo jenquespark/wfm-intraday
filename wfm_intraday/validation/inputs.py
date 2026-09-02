@@ -192,6 +192,10 @@ def _validate_canonical(
     except ValueError as e:
         raise ValueError(f"{label}: {e}")
 
+    # Work on a copy so channel / interval_start normalization never mutates
+    # the caller's frame.
+    df = df.copy()
+
     # ── Channel normalization (strip + lowercase) BEFORE dup detection ──
     if "channel" in df.columns:
         df = _normalize_channel(df, label)
@@ -318,12 +322,21 @@ def _validate_dates(df: pd.DataFrame, label: str) -> None:
 
 
 def _validate_interval_starts(df: pd.DataFrame, label: str) -> None:
-    """Ensure interval_start is ``HH:MM`` with hour 0..23 and minute 0..59."""
+    """Ensure interval_start is ``HH:MM`` with hour 0..23 and minute 0..59.
+
+    Also normalizes each canonical ``interval_start`` to a zero-padded
+    ``HH:MM`` (e.g. ``8:00`` -> ``08:00``) directly on the frame, so every
+    downstream consumer (merge keys, completion, reforecast) compares like
+    for like and one-digit hours cannot create a false key mismatch.
+    """
+    normalized: list[str] = []
     for v in df["interval_start"]:
         s = str(v).strip()
         m = _INTERVAL_RE.match(s)
         if not m:
-            raise ValueError(f"{label}: invalid interval_start '{s}'. Expected HH:MM (e.g. 08:30).")
+            raise ValueError(
+                f"{label}: invalid interval_start '{s}'. Expected HH:MM (e.g. 08:30)."
+            )
         hour = int(m.group(1))
         minute = int(m.group(2))
         if hour > 23:
@@ -334,6 +347,8 @@ def _validate_interval_starts(df: pd.DataFrame, label: str) -> None:
             raise ValueError(
                 f"{label}: invalid interval_start '{s}': minute {minute} is outside 0..59."
             )
+        normalized.append(f"{hour:02d}:{minute:02d}")
+    df["interval_start"] = normalized
 
 
 def _key_set(df: pd.DataFrame | None) -> set:
@@ -383,6 +398,11 @@ def require_no_mismatch(report: ReconciliationReport, mode: str = "retrospective
       intervals whose actuals are not yet observed (the normal intra-day case).
       Actual-only keys remain a hard error (an actual with no forecast is
       always invalid).
+
+    .. note::
+       For as-of mode this legacy form allows *all* forecast-only keys.  Prefer
+       :func:`require_consistent_scope`, which additionally rejects forecast-only
+       keys that are actually *completed* intervals missing an actual.
     """
     parts: list[str] = []
     if report.actual_only:
@@ -391,6 +411,79 @@ def require_no_mismatch(report: ReconciliationReport, mode: str = "retrospective
         parts.append(f"{len(report.schedule_only)} schedule-only key(s)")
     if mode != "as-of" and report.forecast_only:
         parts.append(f"{len(report.forecast_only)} forecast-only key(s)")
+
+    if parts:
+        raise ValueError("Key mismatch between input files: " + ", ".join(parts) + ".")
+
+
+def _interval_end_minutes_key(interval_start: str, interval_length_minutes: int) -> int:
+    """Minutes since midnight of an interval's END time (zero-padded HH:MM)."""
+    if ":" not in interval_start:
+        return -1
+    try:
+        h, m = interval_start.split(":")
+        return int(h) * 60 + int(m) + interval_length_minutes
+    except ValueError:
+        return -1
+
+
+def require_consistent_scope(
+    forecast_df: pd.DataFrame,
+    actuals_df: pd.DataFrame,
+    staffing_df: pd.DataFrame | None,
+    mode: str = "retrospective",
+    checkpoint_minutes: int | None = None,
+    interval_length_minutes: int = 30,
+) -> None:
+    """Scope-aware reconciliation that hard-fails on any true mismatch.
+
+    This is the single strict reconciliation used by ``analyze``, public
+    ``validate``, the CLI, and the web interface (via ``validate``).
+
+    * **actual-only** keys — an actual with no forecast — ALWAYS hard-fail.
+    * **schedule-only** keys — a schedule row with no forecast/actual —
+      ALWAYS hard-fail.
+    * **forecast-only** keys:
+      - ``retrospective`` (no checkpoint): hard-fail (a forecast with no
+        matching actual is a data error).
+      - ``as-of``: allowed ONLY if the interval is genuinely FUTURE, i.e. its
+        END time (interval_start + interval_length) is > the checkpoint.
+        A forecast-only key whose interval is *completed* (end <= checkpoint)
+        means a past interval is missing an actual — hard-fail.
+
+    Raises ``ValueError`` naming the category so callers map it to exit 2.
+    """
+    forecast_only = _key_set(forecast_df) - _key_set(actuals_df)
+    actual_only = _key_set(actuals_df) - _key_set(forecast_df)
+    schedule_only = (
+        _key_set(staffing_df) - _key_set(forecast_df) - _key_set(actuals_df)
+        if staffing_df is not None
+        else set()
+    )
+
+    parts: list[str] = []
+    if actual_only:
+        parts.append(f"{len(actual_only)} actual-only key(s)")
+    if schedule_only:
+        parts.append(f"{len(schedule_only)} schedule-only key(s)")
+
+    if mode == "as-of" and checkpoint_minutes is not None:
+        # forecast-only is allowed only for genuinely future intervals.
+        # A forecast-only interval is "completed-missing-actual" when its END
+        # time <= checkpoint.
+        future_keys = {
+            k
+            for k in forecast_only
+            if _interval_end_minutes_key(k[2], interval_length_minutes) > checkpoint_minutes
+        }
+        completed_missing = forecast_only - future_keys
+        if completed_missing:
+            parts.append(
+                f"{len(completed_missing)} forecast-only key(s) for COMPLETED "
+                f"interval(s) missing an actual (end <= checkpoint)"
+            )
+    elif forecast_only:
+        parts.append(f"{len(forecast_only)} forecast-only key(s)")
 
     if parts:
         raise ValueError("Key mismatch between input files: " + ", ".join(parts) + ".")

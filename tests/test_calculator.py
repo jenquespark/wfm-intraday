@@ -158,20 +158,21 @@ class TestRedistribution:
     def test_donor_conservation(self):
         """Donor surplus must be consumed and never reused."""
         gaps = [
-            _gap("2026-05-04", "08:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            # Later donor at 09:00 (surplus -3), earlier recipients 08:00/08:30.
+            _gap("2026-05-04", "09:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-04", "08:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
             _gap("2026-05-04", "08:30", "inbound", "voice", 10.0, 2.0, "understaffed"),
-            _gap("2026-05-04", "09:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
         ]
         config = Config()
         recs = calculate_redistribution(gaps, config)
         donor_total = sum(
-            r.recommended_transfer_fte for r in recs if r.from_interval_start == "08:00"
+            r.recommended_transfer_fte for r in recs if r.from_interval_start == "09:00"
         )
         assert donor_total <= 3.0 + 0.01
 
     def test_no_cross_date(self):
         gaps = [
-            _gap("2026-05-04", "08:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-04", "09:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
             _gap("2026-05-05", "08:30", "inbound", "voice", 10.0, 2.0, "understaffed"),
         ]
         recs = calculate_redistribution(gaps, Config())
@@ -179,33 +180,35 @@ class TestRedistribution:
 
     def test_no_cross_lob(self):
         gaps = [
-            _gap("2026-05-04", "08:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-04", "09:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
             _gap("2026-05-04", "08:30", "sales", "voice", 10.0, 2.0, "understaffed"),
         ]
         recs = calculate_redistribution(gaps, Config())
         assert len(recs) == 0
 
-    def test_forward_only(self):
-        """A later donor cannot fund an earlier recipient (forward-only)."""
+    def test_opposite_direction_forbidden(self):
+        """An earlier donor cannot fund a later recipient (spec direction)."""
         gaps = [
-            # Recipient at 08:00 (understaffed), donor at 09:00 (overstaffed) — backward.
-            _gap("2026-05-04", "08:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
-            _gap("2026-05-04", "09:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
-        ]
-        recs = calculate_redistribution(gaps, Config())
-        assert len(recs) == 0
-
-    def test_forward_move_allowed(self):
-        """An earlier donor funding a later recipient is allowed."""
-        gaps = [
+            # Earlier donor at 08:00, later recipient at 09:00 — OPPOSITE of the
+            # authoritative "later donor -> earlier recipient" rule.
             _gap("2026-05-04", "08:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
             _gap("2026-05-04", "09:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
         ]
         recs = calculate_redistribution(gaps, Config())
+        assert len(recs) == 0
+
+    def test_later_donor_to_earlier_recipient_allowed(self):
+        """A later donor funding an earlier recipient is the allowed move."""
+        gaps = [
+            # Later donor at 09:00, earlier recipient at 08:00.
+            _gap("2026-05-04", "09:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-04", "08:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
+        ]
+        recs = calculate_redistribution(gaps, Config())
         assert len(recs) >= 1
         for r in recs:
-            assert r.from_interval_start == "08:00"
-            assert r.to_interval_start == "09:00"
+            assert r.from_interval_start == "09:00"
+            assert r.to_interval_start == "08:00"
 
     def test_as_of_future_only(self):
         """In as-of mode, past intervals are not eligible for moves."""
@@ -215,4 +218,14 @@ class TestRedistribution:
         ]
         # checkpoint at 10:00 (600 min) — both intervals are in the past.
         recs = calculate_redistribution(gaps, Config(), mode="as-of", checkpoint_minutes=600)
+        assert len(recs) == 0
+
+    def test_movement_window(self):
+        """A donor farther than the window from the recipient is skipped."""
+        gaps = [
+            # Donor at 12:00, recipient at 08:00 — 240 min > 120 (default window).
+            _gap("2026-05-04", "12:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-04", "08:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
+        ]
+        recs = calculate_redistribution(gaps, Config())
         assert len(recs) == 0

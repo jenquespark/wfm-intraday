@@ -144,15 +144,16 @@ def calculate_redistribution(
     Rules:
         * Only moves capacity on the SAME date, SAME LOB, SAME channel.
         * Donor surplus is consumed and cannot be reused (donor-conserving).
-        * Movement is FORWARD-ONLY in time: a donor (overstaffed interval) may
-          fund a recipient (understaffed interval) only when the donor precedes
-          or equals the recipient in clock time.
-        * In ``as-of`` mode, redistribution is FUTURE-ONLY: only intervals with
-          an interval START time at or after the checkpoint are eligible as
-          recipients, and only intervals already completed are excluded as
-          donors (you cannot move capacity that is already in the past).
+        * A donor (overstaffed interval) may fund a recipient (understaffed
+          interval) only when the donor is LATER in clock time than the
+          recipient (overstaffed later interval funds an earlier understaffed
+          interval).  The opposite direction (earlier donor -> later recipient)
+          is not generated.
         * Movement window is limited by ``max_movement_window_minutes``.
         * Cross-day transfers are PROHIBITED.
+        * In ``as-of`` mode, redistribution is FUTURE-ONLY: only intervals with
+          an interval END time after the checkpoint are eligible as donors or
+          recipients (you cannot move capacity involving completed intervals).
     """
     recommendations: list[RedistributionRecommendation] = []
     groups: dict[tuple[str, str, str], list[StaffingGap]] = {}
@@ -171,6 +172,7 @@ def calculate_redistribution(
                 if g.status == "understaffed" and g.gap_fte is not None and g.gap_fte > 0
             ],
             key=lambda g: _parse_interval_index(g.interval_start),
+            reverse=True,
         )
         overstaffed = sorted(
             [
@@ -179,16 +181,13 @@ def calculate_redistribution(
                 if g.status == "overstaffed" and g.gap_fte is not None and g.gap_fte < 0
             ],
             key=lambda g: _parse_interval_index(g.interval_start),
+            reverse=True,
         )
 
-        # In as-of mode, only FUTURE intervals are eligible recipients, and
-        # only FUTURE intervals may act as donors (past capacity is spent).
-        # "Future" uses the SAME key/time predicate as the rest of the
-        # pipeline: an interval is completed iff its END time
-        # (interval_start + interval_length) <= checkpoint.  A non-completed
-        # (future) interval has END > checkpoint.  This keeps redistribution
-        # consistent with reforecast / IntervalRecord / StaffingGap /
-        # accuracy and independent of input row order.
+        # In as-of mode, only FUTURE intervals are eligible donors/recipients
+        # (completed capacity is spent).  "Future" uses the SAME key/time
+        # predicate as the rest of the pipeline: an interval is completed iff
+        # its END time (interval_start + interval_length) <= checkpoint.
         if mode == "as-of" and checkpoint_minutes is not None:
 
             def _is_future(g) -> bool:
@@ -216,12 +215,13 @@ def calculate_redistribution(
             for over in overstaffed:
                 over_idx = _parse_interval_index(over.interval_start)
 
-                # FORWARD-ONLY: donor must not be later than recipient.
-                if over_idx > under_idx:
+                # LATER donor -> EARLIER recipient.  A donor that is not later
+                # than (or at the same time as) the recipient is skipped.
+                if over_idx <= under_idx:
                     continue
 
                 # Movement window.
-                if (under_idx - over_idx) > window_minutes:
+                if (over_idx - under_idx) > window_minutes:
                     continue
 
                 available = donor_remaining.get(over.interval_start, 0.0)

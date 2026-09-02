@@ -1,8 +1,11 @@
 """Configuration management for WFM Intraday.
 
-Parameters are validated at load time.  Unknown keys are preserved so that
-forward-compatible configs can be shared without error, but critical misspellings
-of known keys ARE rejected because they silently change staffing outputs.
+All parameters are validated strictly at load time.  Unknown config keys,
+unknown channel names, and malformed structures (non-dict root, non-dict
+``channels``, invalid channel entries) raise a clear ``ValueError`` — never a
+raw AttributeError / TypeError.  There is no silent preservation of unknown
+keys: a misspelled key is always an error because it could change staffing
+outputs without any indication.
 """
 
 from __future__ import annotations
@@ -254,11 +257,23 @@ class Config:
             errors.append(f"channel must be 'voice' or 'chat', got '{self.channel}'")
 
         # Validate per-channel configs
-        for ch_name, ch_cfg in self.channels.items():
-            try:
-                ch_cfg.validate()
-            except ValueError as e:
-                errors.append(f"channel '{ch_name}': {e}")
+        if not isinstance(self.channels, dict):
+            errors.append(
+                f"'channels' must be a mapping of channel-name -> ChannelConfig, "
+                f"got {type(self.channels).__name__}."
+            )
+        else:
+            for ch_name, ch_cfg in self.channels.items():
+                if not isinstance(ch_cfg, ChannelConfig):
+                    errors.append(
+                        f"channel '{ch_name}' must be a ChannelConfig, "
+                        f"got {type(ch_cfg).__name__}."
+                    )
+                    continue
+                try:
+                    ch_cfg.validate()
+                except ValueError as e:
+                    errors.append(f"channel '{ch_name}': {e}")
 
         # Validate the column mapping (canonical→source per section).
         try:
@@ -278,7 +293,16 @@ class Config:
 
         Unknown keys cause a hard failure.  This prevents silent misspellings
         from changing staffing outputs without any indication.
+
+        The root ``d`` must be a mapping.  ``channels`` must be a mapping of
+        channel-name -> ``ChannelConfig`` mapping.  Malformed structures raise
+        a clear ``ValueError`` — never a raw AttributeError / TypeError.
         """
+        if not isinstance(d, dict):
+            raise ValueError(
+                f"Config root must be a mapping (dict), got {type(d).__name__}: {d!r}"
+            )
+
         known_keys = set(cls.__dataclass_fields__.keys())
         aliases = cls._legacy_aliases()
 
@@ -297,19 +321,53 @@ class Config:
             elif k in aliases:
                 filtered[aliases[k]] = v
 
-        # Convert channels dict to typed ChannelConfig objects
-        if "channels" in filtered and isinstance(filtered["channels"], dict):
+        # Convert channels dict to typed ChannelConfig objects, validating
+        # structure and channel names.
+        if "channels" in filtered and filtered["channels"] is not None:
+            channels_raw = filtered["channels"]
+            if not isinstance(channels_raw, dict):
+                raise ValueError(
+                    f"'channels' must be a mapping of channel-name -> config, "
+                    f"got {type(channels_raw).__name__}: {channels_raw!r}"
+                )
             channels: dict[str, ChannelConfig] = {}
-            for ch_name, ch_data in filtered["channels"].items():
-                if isinstance(ch_data, dict):
-                    ct = ChannelType(ch_data.get("channel_type", "voice"))
-                    channels[ch_name] = ChannelConfig(
-                        channel_type=ct,
-                        concurrency=ch_data.get("concurrency", 1),
-                        enabled=ch_data.get("enabled", True),
+            for ch_name, ch_data in channels_raw.items():
+                if not isinstance(ch_name, str) or not ch_name.strip():
+                    raise ValueError(
+                        f"channel name must be a non-empty string, got {ch_name!r}"
                     )
+                if not isinstance(ch_data, dict):
+                    raise ValueError(
+                        f"channel '{ch_name}' config must be a mapping of fields, "
+                        f"got {type(ch_data).__name__}: {ch_data!r}"
+                    )
+                # Validate field names inside a channel config.
+                channel_known = {"channel_type", "concurrency", "enabled"}
+                bad_fields = set(ch_data) - channel_known
+                if bad_fields:
+                    raise ValueError(
+                        f"channel '{ch_name}' has unknown key(s) {sorted(bad_fields)}. "
+                        f"Valid keys: {sorted(channel_known)}."
+                    )
+                ch_type_raw = ch_data.get("channel_type", "voice")
+                if isinstance(ch_type_raw, str):
+                    try:
+                        ct = ChannelType(ch_type_raw.strip().lower())
+                    except ValueError:
+                        raise ValueError(
+                            f"channel '{ch_name}' has invalid channel_type "
+                            f"'{ch_type_raw}'. Valid: {[t.value for t in ChannelType]}."
+                        )
                 else:
-                    channels[ch_name] = ch_data
+                    raise ValueError(
+                        f"channel '{ch_name}' channel_type must be a string, "
+                        f"got {type(ch_type_raw).__name__}."
+                    )
+                channels[ch_name] = ChannelConfig(
+                    channel_type=ct,
+                    concurrency=ch_data.get("concurrency", 1),
+                    enabled=ch_data.get("enabled", True),
+                )
             filtered["channels"] = channels
 
         cfg = cls(**filtered)
@@ -325,6 +383,10 @@ class Config:
         if data is None:
             logger.warning("Config file %s is empty — using defaults", path)
             return cls()
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Config root must be a mapping (dict), got {type(data).__name__}: {data!r}"
+            )
         return cls.from_dict(data)
 
     @classmethod

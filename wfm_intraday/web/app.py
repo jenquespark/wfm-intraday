@@ -67,15 +67,20 @@ if validate_btn and uploaded_forecast and uploaded_actuals:
                 f.write(uploaded_staffing.getbuffer())
 
         try:
-            report = validate(fc_path, ac_path, sd_path)
+            report = validate(
+                fc_path,
+                ac_path,
+                sd_path,
+                mode=mode,
+                checkpoint=checkpoint or None,
+                date_filter=analysis_date or None,
+                lob_filter=lob_filter or None,
+            )
+            # validate() raises on any true reconciliation mismatch, so reaching
+            # here means the reconciliation is valid.
             st.session_state.validated = True
             st.session_state.warnings = []
             st.success(f"Validation OK — {report.matched_keys} matched keys")
-            if report.has_mismatch:
-                if report.forecast_only:
-                    st.warning(f"Forecast-only keys: {len(report.forecast_only)}")
-                if report.actual_only:
-                    st.warning(f"Actual-only keys: {len(report.actual_only)}")
         except Exception as e:  # noqa: BLE001 — Streamlit UI boundary shows any error to the user
             st.session_state.validated = False
             st.error(f"Validation failed: {e}")
