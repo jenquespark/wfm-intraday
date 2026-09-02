@@ -168,6 +168,82 @@ class TestCLI:
         assert out_dir.joinpath("intraday_report.xlsx").exists()
         assert out_dir.joinpath("analysis.json").exists()
 
+    def test_invalid_checkpoint_exit_2(self, tmp_path):
+        """A malformed checkpoint hard-fails with exit 2 (never succeeds)."""
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast")
+        _write_csv(ac, "actuals")
+        for bad in ("99:99", "12:70", "-1:00", "24:00", "12am", "notatime", "12345"):
+            result = _run(
+                [
+                    "analyze",
+                    "--forecast",
+                    str(fc),
+                    "--actual",
+                    str(ac),
+                    "--mode",
+                    "as-of",
+                    "--checkpoint",
+                    bad,
+                ]
+            )
+            assert result.returncode == 2, f"checkpoint={bad} rc={result.returncode}"
+
+    def test_invalid_date_filter_exit_2(self, tmp_path):
+        """A non-calendar date_filter hard-fails with exit 2."""
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast")
+        _write_csv(ac, "actuals")
+        for bad in ("2026-09-99", "2026-13-01", "not-a-date", "2026/09/01"):
+            result = _run(["analyze", "--forecast", str(fc), "--actual", str(ac), "--date", bad])
+            assert result.returncode == 2, f"date={bad} rc={result.returncode}"
+
+    def test_output_dir_failure_exit_4(self, tmp_path):
+        """When the output directory cannot be created, exit is 4."""
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast")
+        _write_csv(ac, "actuals")
+        # An existing FILE named 'out' blocks os.makedirs('.../out/...').
+        blocker = tmp_path / "blocked"
+        blocker.write_text("not a dir")
+        bad_out = blocker / "sub"  # parent is a file -> OSError
+        result = _run(
+            [
+                "analyze",
+                "--forecast",
+                str(fc),
+                "--actual",
+                str(ac),
+                "--output-dir",
+                str(bad_out),
+            ]
+        )
+        assert result.returncode == 4
+
+    def test_date_filter_whitespace_ok(self, tmp_path):
+        """A date_filter with surrounding whitespace still matches (normalized)."""
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast")
+        _write_csv(ac, "actuals")
+        result = _run(
+            [
+                "analyze",
+                "--forecast",
+                str(fc),
+                "--actual",
+                str(ac),
+                "--date",
+                "  2026-09-01  ",
+                "--output-dir",
+                str(tmp_path / "out"),
+            ]
+        )
+        assert result.returncode == 0, f"stderr={result.stderr}"
+
 
 def _write_csv(path, kind, **over):
     if kind == "forecast":

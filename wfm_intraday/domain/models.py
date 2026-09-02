@@ -17,8 +17,11 @@ class StaffingRequirement:
     """Staffing required for one interval, split into net and gross.
 
     * net   = agents actively handling contacts (Erlang C result for voice,
-              concurrency-aware for chat, workload for async).
+              concurrency-aware for chat).
     * gross = net uplifted for shrinkage:  gross = net / (1 - shrinkage_pct).
+
+    Async/back-office is not supported; ``channel=async`` is rejected at
+    validation time.
     """
 
     net_fte: float

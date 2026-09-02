@@ -96,3 +96,57 @@ class TestChannelConfig:
     def test_concurrency_zero_raises(self):
         with pytest.raises(ValueError, match="concurrency"):
             ChannelConfig(concurrency=0).validate()
+
+
+class TestConfigHardening:
+    """Malformed config structures must raise clear ValueError."""
+
+    def test_root_non_dict_raises(self):
+        for bad in ([], "bad", 42, 3.14, True):
+            with pytest.raises(ValueError, match="must be a mapping"):
+                Config.from_dict(bad)  # type: ignore[arg-type]
+
+    def test_root_from_yaml_scalar_raises(self, tmp_path):
+        p = tmp_path / "cfg.yaml"
+        p.write_text("just a string\n")
+        with pytest.raises(ValueError, match="must be a mapping"):
+            Config.from_yaml(str(p))
+
+    def test_channels_non_mapping_raises(self):
+        for bad in (["voice", "chat"], "voice", 42, True):
+            with pytest.raises(ValueError, match="'channels' must be a mapping"):
+                Config.from_dict({"channels": bad})
+
+    def test_channel_entry_non_mapping_raises(self):
+        # channel value is not a mapping -> clear ValueError, not AttributeError.
+        with pytest.raises(ValueError, match="config must be a mapping"):
+            Config.from_dict({"channels": {"voice": "not-a-config"}})
+
+    def test_channel_unknown_field_raises(self):
+        with pytest.raises(ValueError, match="unknown key"):
+            Config.from_dict({"channels": {"voice": {"channel_type": "voice", "typo_field": 1}}})
+
+    def test_channel_bad_channel_type_raises(self):
+        with pytest.raises(ValueError, match="invalid channel_type"):
+            Config.from_dict({"channels": {"voice": {"channel_type": "banana"}}})
+
+    def test_channel_unknown_name_raises(self):
+        # An unknown top-level key (here a misspelled channel) hard-fails.
+        with pytest.raises(ValueError, match="Unknown config key"):
+            Config.from_dict({"channelsx": {"voice": {}}})
+
+    def test_channels_passed_to_config_obj_valid(self):
+        cfg = Config.from_dict({"channels": {"voice": {"channel_type": "voice", "enabled": True}}})
+        assert "voice" in cfg.channels
+        assert cfg.channels["voice"].channel_type.value == "voice"
+
+    def test_invalid_config_obj_is_not_channel_config_raises(self):
+        # Passing a raw dict as config_obj must fail cleanly.
+        import wfm_intraday
+
+        with pytest.raises(ValueError, match="config_obj must be a Config"):
+            wfm_intraday.validate(
+                "a.csv",
+                "b.csv",
+                config_obj={"interval_length_minutes": 30},  # type: ignore[arg-type]
+            )

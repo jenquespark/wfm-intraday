@@ -334,9 +334,7 @@ def _validate_interval_starts(df: pd.DataFrame, label: str) -> None:
         s = str(v).strip()
         m = _INTERVAL_RE.match(s)
         if not m:
-            raise ValueError(
-                f"{label}: invalid interval_start '{s}'. Expected HH:MM (e.g. 08:30)."
-            )
+            raise ValueError(f"{label}: invalid interval_start '{s}'. Expected HH:MM (e.g. 08:30).")
         hour = int(m.group(1))
         minute = int(m.group(2))
         if hour > 23:

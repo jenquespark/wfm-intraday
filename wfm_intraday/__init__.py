@@ -102,6 +102,13 @@ def validate(
     if date_filter is not None:
         _validate_date_filter(date_filter)
 
+    # Normalize canonical filter strings (strip whitespace) so the downstream
+    # equality comparisons match the post-validation input shape.
+    if isinstance(date_filter, str):
+        date_filter = date_filter.strip()
+    if isinstance(lob_filter, str):
+        lob_filter = lob_filter.strip()
+
     # Scope before reconciling (out-of-scope rows must not create mismatches).
     if date_filter:
         fc_df = fc_df[fc_df["date"] == date_filter].copy()
@@ -179,6 +186,15 @@ def analyze(
         _validate_date_filter(date_filter)
     if lob_filter is not None and (not isinstance(lob_filter, str) or not lob_filter.strip()):
         raise ValueError(f"lob_filter must be a non-empty string, got {lob_filter!r}")
+
+    # Normalize the CANONICAL filter strings so later equality comparisons use
+    # the same shape as the validated input values (stripped of surrounding
+    # whitespace).  Without this, a padded " 2026-09-01 " would pass date
+    # validation yet still fail to match any row — a silent false mismatch.
+    if isinstance(date_filter, str):
+        date_filter = date_filter.strip()
+    if isinstance(lob_filter, str):
+        lob_filter = lob_filter.strip()
 
     # ── 1. Load config ─────────────────────────────────────────────────
     config = _load_config(config_obj, config_path)
@@ -319,6 +335,13 @@ def generate_sample_data(output_dir: str = "data") -> None:
 
 def _load_config(config_obj: Config | None, config_path: str | None) -> Config:
     if config_obj is not None:
+        if not isinstance(config_obj, Config):
+            raise ValueError(
+                f"config_obj must be a Config instance, got {type(config_obj).__name__}."
+            )
+        # Validate it so an invalid config_obj surfaces as a clear ValueError
+        # rather than a raw AttributeError/TypeError downstream.
+        config_obj.validate()
         return config_obj
     if config_path:
         return Config.from_yaml(config_path)
@@ -356,8 +379,7 @@ def _parse_time(t: str) -> int:
 
     if not 0 <= hours <= 23:
         raise ValueError(
-            f"checkpoint hour {hours} is outside 00..23 (got '{t}'). "
-            f"Expected a valid HH:MM time."
+            f"checkpoint hour {hours} is outside 00..23 (got '{t}'). Expected a valid HH:MM time."
         )
     if not 0 <= minutes <= 59:
         raise ValueError(
@@ -372,9 +394,7 @@ def _validate_date_filter(date_filter: str) -> None:
     from datetime import date as _date
 
     if not isinstance(date_filter, str):
-        raise ValueError(
-            f"date_filter must be a YYYY-MM-DD calendar date, got {date_filter!r}"
-        )
+        raise ValueError(f"date_filter must be a YYYY-MM-DD calendar date, got {date_filter!r}")
     s = date_filter.strip()
     parts = s.split("-")
     if len(parts) != 3 or not all(p.isdigit() for p in parts):

@@ -171,9 +171,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"CALCULATION ERROR: {e}", file=sys.stderr)
         return EXIT_CALC_ERROR
 
-    # Write outputs — any failure returns non-zero
+    # Write outputs — any failure returns EXIT_OUTPUT_ERROR (4).
     output_dir = args.output_dir
-    os.makedirs(output_dir, exist_ok=True)
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+    except OSError as e:
+        print(f"ERROR: Cannot create output directory '{output_dir}': {e}", file=sys.stderr)
+        return EXIT_OUTPUT_ERROR
     output_errors = 0
 
     try:
@@ -209,24 +213,29 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         output_errors += 1
 
     # Print summary
-    _print_summary(result)
+    _print_summary(result, mode=args.mode)
 
     if output_errors > 0:
         return EXIT_OUTPUT_ERROR
     return EXIT_SUCCESS
 
 
-def _print_summary(result: AnalysisResult) -> None:
+def _print_summary(result: AnalysisResult, mode: str = "retrospective") -> None:
     print("\n" + "=" * 60)
     print("ANALYSIS SUMMARY")
     print("=" * 60)
 
-    if result.validation and result.validation.has_mismatch:
-        print("\n⚠ KEY MISMATCHES")
-        if result.validation.forecast_only:
-            print(f"  Forecast-only: {len(result.validation.forecast_only)}")
-        if result.validation.actual_only:
-            print(f"  Actual-only:   {len(result.validation.actual_only)}")
+    validation = result.validation
+    if validation:
+        if validation.actual_only:
+            # Actual-only keys are always a true mismatch.
+            print("\n⚠ ACTUAL-ONLY KEYS (no matching forecast)")
+            print(f"  Actual-only: {len(validation.actual_only)}")
+        if mode != "as-of" and validation.forecast_only:
+            # In retrospective mode, forecast-only keys are a true mismatch.
+            # In as-of mode they are legitimately future intervals.
+            print("\n⚠ FORECAST-ONLY KEYS")
+            print(f"  Forecast-only: {len(validation.forecast_only)}")
 
     fa = result.forecast_accuracy
     if "overall" in fa:

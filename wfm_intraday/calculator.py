@@ -1,7 +1,11 @@
 """Core WFM calculations.
 
-staffing requirements (Erlang C / chat / async),
+Staffing requirements (Erlang C for voice, concurrency-aware for chat),
 gap analysis, redistribution recommendations, intra-day reforecast.
+
+Async/back-office staffing is NOT supported in this version.  Any input row
+with ``channel=async`` raises a ``ValueError`` rather than falling back to a
+silent model.
 """
 
 from __future__ import annotations

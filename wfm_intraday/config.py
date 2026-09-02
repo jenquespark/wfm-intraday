@@ -266,8 +266,7 @@ class Config:
             for ch_name, ch_cfg in self.channels.items():
                 if not isinstance(ch_cfg, ChannelConfig):
                     errors.append(
-                        f"channel '{ch_name}' must be a ChannelConfig, "
-                        f"got {type(ch_cfg).__name__}."
+                        f"channel '{ch_name}' must be a ChannelConfig, got {type(ch_cfg).__name__}."
                     )
                     continue
                 try:
@@ -299,9 +298,7 @@ class Config:
         a clear ``ValueError`` — never a raw AttributeError / TypeError.
         """
         if not isinstance(d, dict):
-            raise ValueError(
-                f"Config root must be a mapping (dict), got {type(d).__name__}: {d!r}"
-            )
+            raise ValueError(f"Config root must be a mapping (dict), got {type(d).__name__}: {d!r}")
 
         known_keys = set(cls.__dataclass_fields__.keys())
         aliases = cls._legacy_aliases()
@@ -333,9 +330,7 @@ class Config:
             channels: dict[str, ChannelConfig] = {}
             for ch_name, ch_data in channels_raw.items():
                 if not isinstance(ch_name, str) or not ch_name.strip():
-                    raise ValueError(
-                        f"channel name must be a non-empty string, got {ch_name!r}"
-                    )
+                    raise ValueError(f"channel name must be a non-empty string, got {ch_name!r}")
                 if not isinstance(ch_data, dict):
                     raise ValueError(
                         f"channel '{ch_name}' config must be a mapping of fields, "
