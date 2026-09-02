@@ -48,6 +48,8 @@ def validate(
     actuals_path: str,
     staffing_path: str | None = None,
     column_mapping: dict[str, str] | None = None,
+    config_path: str | None = None,
+    config_obj: Config | None = None,
 ) -> ReconciliationReport:
     """Validate input files and return a reconciliation report.
 
@@ -55,7 +57,9 @@ def validate(
         forecast_path: Path to forecast CSV.
         actuals_path: Path to actuals CSV.
         staffing_path: Optional path to schedule CSV.
-        column_mapping: Optional column name mapping dict.
+        column_mapping: Optional column name mapping dict (canonical → source).
+        config_path: Optional path to config YAML (may carry column_mapping).
+        config_obj: Optional Config object (overrides config_path).
 
     Returns:
         ReconciliationReport with key-matching statistics.
@@ -64,8 +68,10 @@ def validate(
         FileNotFoundError: If a required input file is missing.
         ValueError: If input columns, values, or duplicates are invalid.
     """
+    config = _load_config(config_obj, config_path)
+    mapping = column_mapping if column_mapping is not None else config.column_mapping
     fc_df, ac_df, sd_df, _warns = validate_input_files(
-        forecast_path, actuals_path, staffing_path, column_mapping=column_mapping
+        forecast_path, actuals_path, staffing_path, column_mapping=mapping
     )
     return reconcile_keys(fc_df, ac_df, sd_df)
 
@@ -117,8 +123,9 @@ def analyze(
     config = _load_config(config_obj, config_path)
 
     # ── 2. Load & validate input data ──────────────────────────────────
+    mapping = column_mapping if column_mapping is not None else config.column_mapping
     fc_df, ac_df, sd_df, warns = validate_input_files(
-        forecast_path, actuals_path, staffing_path, column_mapping=column_mapping
+        forecast_path, actuals_path, staffing_path, column_mapping=mapping
     )
     report = reconcile_keys(fc_df, ac_df, sd_df)
 

@@ -82,20 +82,39 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_validate(args: argparse.Namespace) -> int:
     """Validate input files and print reconciliation report.
 
-    Duplicate keys and key mismatches HARD-FAIL with exit code 2.
+    Duplicate keys, key mismatches, NaN/inf/non-numeric values, malformed
+    dates / interval_start, and unsupported channels HARD-FAIL with exit 2.
+    Uses the same config-aware column_mapping service as analyze().
     """
+    from wfm_intraday.config import Config
     from wfm_intraday.validation.inputs import require_no_mismatch
+
+    config_path = args.config
+    try:
+        if config_path is None:
+            try:
+                config = Config.from_yaml("config.yaml")
+            except FileNotFoundError:
+                config = Config()
+        else:
+            config = Config.from_yaml(config_path)
+    except FileNotFoundError:
+        print(f"ERROR: Config file not found: {config_path}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    except ValueError as e:
+        print(f"ERROR: Invalid config: {e}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
 
     try:
         fc_df, ac_df, sd_df, warns = validate_input_files(
-            args.forecast, args.actuals, args.staffing
+            args.forecast,
+            args.actuals,
+            args.staffing,
+            column_mapping=config.column_mapping,
         )
         report = reconcile_keys(fc_df, ac_df, sd_df)
         require_no_mismatch(report)
-    except FileNotFoundError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return EXIT_INPUT_ERROR
-    except ValueError as e:
+    except (FileNotFoundError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return EXIT_INPUT_ERROR
 

@@ -93,19 +93,107 @@ class TestCLI:
         result = _run(["analyze", "--forecast", str(fc), "--actual", str(ac)])
         assert result.returncode == 2
 
+    def test_unknown_channel_validate_exit_2(self, tmp_path):
+        """validate with an unsupported channel (fax) exits 2."""
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast", channel="fax")
+        _write_csv(ac, "actuals")
+        result = _run(["validate", "--forecast", str(fc), "--actual", str(ac)])
+        assert result.returncode == 2
+        assert "unsupported channel" in result.stderr
 
-def _write_csv(path, kind):
+    def test_nan_validate_exit_2(self, tmp_path):
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast", forecast_volume=float("nan"))
+        _write_csv(ac, "actuals")
+        result = _run(["validate", "--forecast", str(fc), "--actual", str(ac)])
+        assert result.returncode == 2
+        assert "NaN" in result.stderr
+
+    def test_bad_interval_validate_exit_2(self, tmp_path):
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast", interval_start="25:00")
+        _write_csv(ac, "actuals")
+        result = _run(["validate", "--forecast", str(fc), "--actual", str(ac)])
+        assert result.returncode == 2
+
+    def test_cli_column_mapping_end_to_end(self, tmp_path):
+        """CLI analyze with external-column CSVs + --config column_mapping."""
+        cfg = tmp_path / "cfg.yaml"
+        cfg.write_text(
+            "interval_length_minutes: 30\n"
+            "column_mapping:\n"
+            "  forecast:\n"
+            '    date: "Contact Date"\n'
+            '    lob: "Queue"\n'
+            '    interval_start: "Slot"\n'
+            '    channel: "Chan"\n'
+            '    forecast_volume: "FCast"\n'
+            '    forecast_aht_seconds: "AHT"\n'
+            "  actuals:\n"
+            '    date: "Contact Date"\n'
+            '    lob: "Queue"\n'
+            '    interval_start: "Slot"\n'
+            '    channel: "Chan"\n'
+            '    actual_volume: "ACast"\n'
+            '    actual_aht_seconds: "AHTa"\n'
+        )
+        fc = tmp_path / "vendor_fc.csv"
+        ac = tmp_path / "vendor_ac.csv"
+        fc.write_text(
+            "Contact Date,Queue,Slot,Chan,FCast,AHT\n2026-09-01,inbound,08:00,voice,100.0,180.0\n"
+        )
+        ac.write_text(
+            "Contact Date,Queue,Slot,Chan,ACast,AHTa\n2026-09-01,inbound,08:00,voice,110.0,180.0\n"
+        )
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        result = _run(
+            [
+                "analyze",
+                "--forecast",
+                str(fc),
+                "--actual",
+                str(ac),
+                "--config",
+                str(cfg),
+                "--output-dir",
+                str(out_dir),
+            ]
+        )
+        assert result.returncode == 0, f"stderr={result.stderr}"
+        assert out_dir.joinpath("intraday_report.xlsx").exists()
+        assert out_dir.joinpath("analysis.json").exists()
+
+
+def _write_csv(path, kind, **over):
     if kind == "forecast":
-        pd.DataFrame(
-            {
-                "date": ["2026-09-01"],
-                "lob": ["inbound"],
-                "interval_start": ["08:00"],
-                "channel": ["voice"],
-                "forecast_volume": [100.0],
-                "forecast_aht_seconds": [180.0],
-            }
-        ).to_csv(path, index=False)
+        row = {
+            "date": ["2026-09-01"],
+            "lob": ["inbound"],
+            "interval_start": ["08:00"],
+            "channel": ["voice"],
+            "forecast_volume": [100.0],
+            "forecast_aht_seconds": [180.0],
+        }
+        for k, v in over.items():
+            row[k] = [v] if not isinstance(v, list) else v
+        pd.DataFrame(row).to_csv(path, index=False)
+    elif kind == "actuals":
+        row = {
+            "date": ["2026-09-01"],
+            "lob": ["inbound"],
+            "interval_start": ["08:00"],
+            "channel": ["voice"],
+            "actual_volume": [110.0],
+            "actual_aht_seconds": [180.0],
+        }
+        for k, v in over.items():
+            row[k] = [v] if not isinstance(v, list) else v
+        pd.DataFrame(row).to_csv(path, index=False)
     else:
         pd.DataFrame(
             {
@@ -113,7 +201,6 @@ def _write_csv(path, kind):
                 "lob": ["inbound"],
                 "interval_start": ["08:00"],
                 "channel": ["voice"],
-                "actual_volume": [110.0],
-                "actual_aht_seconds": [180.0],
+                "scheduled_fte": [10.0],
             }
         ).to_csv(path, index=False)

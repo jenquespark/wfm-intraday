@@ -14,7 +14,58 @@ from typing import Any
 
 import yaml
 
+from wfm_intraday.domain.models import (
+    ACTUALS_COLUMNS,
+    FORECAST_COLUMNS,
+    SCHEDULE_COLUMNS,
+)
+
 logger = logging.getLogger(__name__)
+
+# Per-source-type canonical columns, used to validate a column mapping.
+_VALID_SECTIONS: dict[str, set[str]] = {
+    "forecast": set(FORECAST_COLUMNS),
+    "actuals": set(ACTUALS_COLUMNS),
+    "staffing": set(SCHEDULE_COLUMNS),
+}
+
+
+def validate_column_mapping(mapping: dict[str, dict[str, str]] | None) -> None:
+    """Validate a per-source column mapping ``{section: {canonical: source}}``.
+
+    Hard-fails on:
+    * unknown section (not forecast / actuals / staffing)
+    * unknown canonical column for that section
+    * duplicate source column mapped to two different canonicals
+
+    The mapping is ALWAYS written canonical → source.  The adapter reverses
+    it internally for ``df.rename``.  Missing *source* columns in an actual
+    file are detected at load time (the rename leaves the canonical absent,
+    which the adapter reports as missing required columns).
+    """
+    if not mapping:
+        return
+    for section, sec_map in mapping.items():
+        if section not in _VALID_SECTIONS:
+            raise ValueError(
+                f"Unknown column_mapping section '{section}'. "
+                f"Valid sections: {sorted(_VALID_SECTIONS)}."
+            )
+        expected = _VALID_SECTIONS[section]
+        seen_sources: dict[str, str] = {}
+        for canonical, source in sec_map.items():
+            if canonical not in expected:
+                raise ValueError(
+                    f"Unknown canonical column '{canonical}' in "
+                    f"column_mapping[{section}]. "
+                    f"Valid canonical columns: {sorted(expected)}."
+                )
+            if source in seen_sources:
+                raise ValueError(
+                    f"Duplicate source column '{source}' in column_mapping[{section}] "
+                    f"(mapped to both '{seen_sources[source]}' and '{canonical}')."
+                )
+            seen_sources[source] = canonical
 
 
 class ChannelType(str, Enum):
@@ -120,6 +171,13 @@ class Config:
     channels: dict[str, ChannelConfig] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
+    # Column mapping: {section: {canonical: source}}, canonical → source.
+    # Consumed by analyze()/validate()/CLI/web through the shared adapter
+    # pipeline.  Validated in Config.validate().
+    # ------------------------------------------------------------------
+    column_mapping: dict[str, dict[str, str]] | None = None
+
+    # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
     def validate(self) -> None:
@@ -172,6 +230,12 @@ class Config:
                 ch_cfg.validate()
             except ValueError as e:
                 errors.append(f"channel '{ch_name}': {e}")
+
+        # Validate the column mapping (canonical→source per section).
+        try:
+            validate_column_mapping(self.column_mapping)
+        except ValueError as e:
+            errors.append(str(e))
 
         if errors:
             raise ValueError("Config validation failed:\n" + "\n".join(errors))

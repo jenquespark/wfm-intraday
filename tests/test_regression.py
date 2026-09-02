@@ -879,3 +879,273 @@ class TestPositionalMaskElimination:
             # staffing gaps identical
             rg = {(g.interval_start, g.date, g.channel): g.gap_fte for g in r.staffing_gaps}
             assert rg == ref_gap_by
+
+
+class _InputValHelpers:
+    """Shared helpers for input-validation tests (rejection at validate stage)."""
+
+    def _write(self, tmp, name, df):
+        p = os.path.join(tmp, name)
+        df.to_csv(p, index=False)
+        return p
+
+    def _fc(self, tmp, **over):
+        row = {
+            "date": ["2026-09-01"],
+            "lob": ["inbound"],
+            "interval_start": ["08:00"],
+            "channel": ["voice"],
+            "forecast_volume": [100.0],
+            "forecast_aht_seconds": [180.0],
+        }
+        for k, v in over.items():
+            if not isinstance(v, list):
+                v = [v]
+            row[k] = v
+        return self._write(tmp, "fc.csv", pd.DataFrame(row))
+
+    def _ac(self, tmp, **over):
+        row = {
+            "date": ["2026-09-01"],
+            "lob": ["inbound"],
+            "interval_start": ["08:00"],
+            "channel": ["voice"],
+            "actual_volume": [110.0],
+            "actual_aht_seconds": [180.0],
+        }
+        for k, v in over.items():
+            if not isinstance(v, list):
+                v = [v]
+            row[k] = v
+        return self._write(tmp, "ac.csv", pd.DataFrame(row))
+
+
+class TestNumericFieldsFailAtValidation(_InputValHelpers):
+    def test_nan_required_field_fails_at_validation(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, forecast_volume=float("nan"))
+        acp = self._ac(tmp)
+        with pytest.raises(ValueError, match="NaN"):
+            validate_input_files(fcp, acp)
+
+    def test_non_numeric_numeric_field_fails_at_validation(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, forecast_volume="abc")
+        acp = self._ac(tmp)
+        with pytest.raises(ValueError, match="non-numeric"):
+            validate_input_files(fcp, acp)
+
+    def test_infinite_numeric_field_fails_at_validation(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp)
+        acp = self._ac(tmp, actual_volume=float("inf"))
+        with pytest.raises(ValueError, match="infinite|Inf"):
+            validate_input_files(fcp, acp)
+
+    def test_negative_numeric_field_fails_at_validation(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, forecast_volume=-5.0)
+        acp = self._ac(tmp)
+        with pytest.raises(ValueError, match="negative"):
+            validate_input_files(fcp, acp)
+
+    def test_zero_or_negative_aht_fails_at_validation(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, forecast_aht_seconds=0.0)
+        acp = self._ac(tmp)
+        with pytest.raises(ValueError, match="AHT|aht"):
+            validate_input_files(fcp, acp)
+
+
+class TestInvalidDatesAndIntervalsFailAtValidation(_InputValHelpers):
+    def test_invalid_date_fails_at_validation(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, date="2026-13-40")
+        acp = self._ac(tmp)
+        with pytest.raises(ValueError, match="date"):
+            validate_input_files(fcp, acp)
+
+    def test_invalid_interval_hour_fails_at_validation(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, interval_start="25:00")
+        acp = self._ac(tmp)
+        with pytest.raises(ValueError, match="interval_start|hour"):
+            validate_input_files(fcp, acp)
+
+    def test_invalid_interval_minute_fails_at_validation(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, interval_start="08:75")
+        acp = self._ac(tmp)
+        with pytest.raises(ValueError, match="interval_start|minute"):
+            validate_input_files(fcp, acp)
+
+    def test_malformed_interval_fails_at_validation(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, interval_start="notatime")
+        acp = self._ac(tmp)
+        with pytest.raises(ValueError, match="interval_start"):
+            validate_input_files(fcp, acp)
+
+
+class TestChannelValidation(_InputValHelpers):
+    def test_channel_normalization(self):
+        """' VOICE ' / 'Voice' normalize to 'voice'; flows to output."""
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, channel=" VOICE ")
+        acp = self._ac(tmp, channel="Voice ")
+        result = analyze(fcp, acp)
+        assert result.intervals[0].channel == "voice"
+
+    def test_chat_normalization_accepted(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, channel=" CHAT ")
+        acp = self._ac(tmp, channel="chat")
+        validate_input_files(fcp, acp)  # must not raise
+
+    def test_unknown_channel_hard_fails(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        fcp = self._fc(tmp, channel="fax")
+        acp = self._ac(tmp)
+        with pytest.raises(ValueError, match="unsupported channel"):
+            validate_input_files(fcp, acp)
+
+    def test_async_email_unknown_hard_fail(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        for bad in ("async", "email", "SMS", "vOicex"):
+            tmp = tempfile.mkdtemp()
+            fcp = self._fc(tmp, channel=bad)
+            acp = self._ac(tmp)
+            with pytest.raises(ValueError, match="unsupported channel"):
+                validate_input_files(fcp, acp)
+
+
+class TestConfigColumnMappingEndToEnd:
+    def _write_cfg(self, tmp):
+        cfg_yaml = (
+            "interval_length_minutes: 30\n"
+            "column_mapping:\n"
+            "  forecast:\n"
+            '    date: "Contact Date"\n'
+            '    lob: "Queue"\n'
+            '    interval_start: "Slot"\n'
+            '    channel: "Chan"\n'
+            '    forecast_volume: "FCast"\n'
+            '    forecast_aht_seconds: "AHT"\n'
+            "  actuals:\n"
+            '    date: "Contact Date"\n'
+            '    lob: "Queue"\n'
+            '    interval_start: "Slot"\n'
+            '    channel: "Chan"\n'
+            '    actual_volume: "ACast"\n'
+            '    actual_aht_seconds: "AHTa"\n'
+        )
+        p = os.path.join(tmp, "cfg.yaml")
+        with open(p, "w") as f:
+            f.write(cfg_yaml)
+        return p
+
+    def _write_mapped_csvs(self, tmp):
+        fc_csv = (
+            "Contact Date,Queue,Slot,Chan,FCast,AHT\n2026-09-01,inbound,08:00,voice,100.0,180.0\n"
+        )
+        ac_csv = (
+            "Contact Date,Queue,Slot,Chan,ACast,AHTa\n2026-09-01,inbound,08:00,voice,110.0,180.0\n"
+        )
+        fcp = os.path.join(tmp, "vendor_fc.csv")
+        acp = os.path.join(tmp, "vendor_ac.csv")
+        with open(fcp, "w") as f:
+            f.write(fc_csv)
+        with open(acp, "w") as f:
+            f.write(ac_csv)
+        return fcp, acp
+
+    def test_config_column_mapping_used_by_analyze_and_validate(self):
+        """config.yaml column_mapping is consumed by both analyze() and validate()."""
+        from wfm_intraday import analyze as run_analyze
+        from wfm_intraday import validate as run_validate
+
+        tmp = tempfile.mkdtemp()
+        cfgp = self._write_cfg(tmp)
+        fcp, acp = self._write_mapped_csvs(tmp)
+
+        # validate() with config_path uses the mapping.
+        rep = run_validate(fcp, acp, config_path=cfgp)
+        assert rep.matched_keys == 1
+
+        # analyze() with config_path uses the mapping.
+        res = run_analyze(fcp, acp, config_path=cfgp)
+        assert len(res.intervals) == 1
+        assert res.intervals[0].actual_volume == 110.0
+        assert res.intervals[0].forecast_volume == 100.0
+        assert res.intervals[0].channel == "voice"
+
+    def test_invalid_mapping_rejected(self):
+        """Unknown canonical / unknown section / duplicate source hard-fail."""
+        from wfm_intraday.config import Config
+
+        # unknown canonical
+        with pytest.raises(ValueError, match="Unknown canonical"):
+            Config.from_dict({"column_mapping": {"forecast": {"lobby": "Queue"}}})
+        # unknown section
+        with pytest.raises(ValueError, match="Unknown column_mapping section"):
+            Config.from_dict({"column_mapping": {"notasection": {"date": "D"}}})
+        # duplicate source within a section
+        with pytest.raises(ValueError, match="Duplicate source column"):
+            Config.from_dict(
+                {
+                    "column_mapping": {
+                        "forecast": {
+                            "date": "Contact Date",
+                            "lob": "Contact Date",
+                        }
+                    }
+                }
+            )
+
+    def test_mapping_without_config_path_is_used_in_analyze(self):
+        """Explicit per-section column_mapping arg is honored by analyze()."""
+        tmp = tempfile.mkdtemp()
+        fcp, acp = self._write_mapped_csvs(tmp)
+        mapping = {
+            "forecast": {
+                "date": "Contact Date",
+                "lob": "Queue",
+                "interval_start": "Slot",
+                "channel": "Chan",
+                "forecast_volume": "FCast",
+                "forecast_aht_seconds": "AHT",
+            },
+            "actuals": {
+                "date": "Contact Date",
+                "lob": "Queue",
+                "interval_start": "Slot",
+                "channel": "Chan",
+                "actual_volume": "ACast",
+                "actual_aht_seconds": "AHTa",
+            },
+        }
+        res = analyze(fcp, acp, column_mapping=mapping)
+        assert res.intervals[0].actual_volume == 110.0
