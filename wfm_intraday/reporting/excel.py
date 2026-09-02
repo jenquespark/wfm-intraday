@@ -13,6 +13,27 @@ from wfm_intraday.domain.models import AnalysisResult
 logger = logging.getLogger(__name__)
 
 
+def _present(value: Any) -> Any:
+    """Return a numeric value as-is, or an empty cell for missing (None) data.
+
+    A real zero (``0.0``) is a legitimate value and MUST never render blank.
+    ``None`` means "missing" — for actuals that is a future as-of interval
+    with no observed data, and for schedule/requirement fields it means the
+    value was not computed.
+    """
+    return value if value is not None else ""
+
+
+def _present_na(value: Any) -> Any:
+    """Like :func:`_present`, but missing (None) data renders as ``"N/A"``.
+
+    Used by the staffing-gaps sheet where a missing schedule is meaningful:
+    ``"N/A"`` preserves the "no schedule data" reading while a real zero
+    scheduled FTE stays ``0.0``.
+    """
+    return value if value is not None else "N/A"
+
+
 def write_excel_report(path: str, result: AnalysisResult) -> str:
     """Write AnalysisResult to a multi-sheet Excel workbook."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -71,17 +92,17 @@ def _write_intervals(writer: Any, result: AnalysisResult) -> None:
                 "Channel": iv.channel,
                 "Forecast Volume": iv.forecast_volume,
                 "Forecast AHT (s)": iv.forecast_aht_seconds,
-                "Actual Volume": iv.actual_volume or "",
-                "Actual AHT (s)": iv.actual_aht_seconds or "",
-                "Reforecast Volume": iv.reforecast_volume or "",
-                "Forecast Req Net FTE": iv.forecast_required_net_fte or "",
-                "Forecast Req Gross FTE": iv.forecast_required_gross_fte or "",
-                "Actual Req Net FTE": iv.actual_required_net_fte or "",
-                "Actual Req Gross FTE": iv.actual_required_gross_fte or "",
-                "Reforecast Req Net FTE": iv.reforecast_required_net_fte or "",
-                "Reforecast Req Gross FTE": iv.reforecast_required_gross_fte or "",
-                "Scheduled FTE": iv.scheduled_fte or "",
-                "Staffing Gap FTE": iv.staffing_gap_fte or "",
+                "Actual Volume": _present(iv.actual_volume),
+                "Actual AHT (s)": _present(iv.actual_aht_seconds),
+                "Reforecast Volume": _present(iv.reforecast_volume),
+                "Forecast Req Net FTE": _present(iv.forecast_required_net_fte),
+                "Forecast Req Gross FTE": _present(iv.forecast_required_gross_fte),
+                "Actual Req Net FTE": _present(iv.actual_required_net_fte),
+                "Actual Req Gross FTE": _present(iv.actual_required_gross_fte),
+                "Reforecast Req Net FTE": _present(iv.reforecast_required_net_fte),
+                "Reforecast Req Gross FTE": _present(iv.reforecast_required_gross_fte),
+                "Scheduled FTE": _present(iv.scheduled_fte),
+                "Staffing Gap FTE": _present(iv.staffing_gap_fte),
             }
         )
     pd.DataFrame(rows).to_excel(writer, sheet_name="Interval_Analysis", index=False)
@@ -112,14 +133,14 @@ def _write_gaps(writer: Any, result: AnalysisResult) -> None:
                 "Interval": g.interval_start,
                 "LOB": g.lob,
                 "Channel": g.channel,
-                "Forecast Required Net FTE": g.forecast_required_net_fte or "",
-                "Forecast Required Gross FTE": g.forecast_required_gross_fte or "",
-                "Actual Required Net FTE": g.actual_required_net_fte or "",
-                "Actual Required Gross FTE": g.actual_required_gross_fte or "",
-                "Reforecast Required Net FTE": g.reforecast_required_net_fte or "",
-                "Reforecast Required Gross FTE": g.reforecast_required_gross_fte or "",
-                "Scheduled FTE": g.scheduled_fte or "N/A",
-                "Gap FTE": g.gap_fte or "N/A",
+                "Forecast Required Net FTE": _present(g.forecast_required_net_fte),
+                "Forecast Required Gross FTE": _present(g.forecast_required_gross_fte),
+                "Actual Required Net FTE": _present(g.actual_required_net_fte),
+                "Actual Required Gross FTE": _present(g.actual_required_gross_fte),
+                "Reforecast Required Net FTE": _present(g.reforecast_required_net_fte),
+                "Reforecast Required Gross FTE": _present(g.reforecast_required_gross_fte),
+                "Scheduled FTE": _present_na(g.scheduled_fte),
+                "Gap FTE": _present_na(g.gap_fte),
                 "Status": g.status,
             }
         )

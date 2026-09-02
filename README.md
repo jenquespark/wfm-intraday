@@ -6,7 +6,7 @@ staffing requirements against scheduled FTE.
 
 It works with exported CSV files and produces Excel, CSV, and JSON reports.
 Voice staffing uses Erlang C. Chat uses a simplified concurrency-aware
-capacity model. Async staffing is not supported in version 0.2.
+capacity model. Async staffing is not supported in version 0.2.1.
 
 ## What it does
 
@@ -63,6 +63,8 @@ Output files appear in `output/`:
 
 - [Getting started](docs/getting-started.md)
 - [Input file format](docs/input-files.md)
+- [Input adapters](docs/adapters.md)
+- [Channels](docs/channels.md)
 - [Methodology](docs/methodology.md)
 - [Interpreting results](docs/interpreting-results.md)
 - [Limitations](docs/limitations.md)

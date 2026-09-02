@@ -150,3 +150,44 @@ class TestConfigHardening:
                 "b.csv",
                 config_obj={"interval_length_minutes": 30},  # type: ignore[arg-type]
             )
+
+
+class TestConfigChannelContract:
+    """The ``channels`` config block uses arbitrary application labels.
+
+    Channel-override keys are free-form labels (e.g. ``inbound_calls``) and are
+    NEVER interpreted as input channel values, so a label like ``fax`` is valid.
+    ONLY the input ``channel`` column in the data is restricted to voice/chat
+    (that rejection is covered by the input-validation tests).  ``channel_type``
+    inside a ChannelConfig is restricted to voice/chat.
+    """
+
+    def test_channel_override_names_are_arbitrary_labels(self):
+        cfg = Config.from_dict(
+            {
+                "channels": {
+                    "inbound_calls": {"channel_type": "voice"},
+                    "chat_support": {"channel_type": "chat"},
+                }
+            }
+        )
+        assert cfg.channels["inbound_calls"].channel_type.value == "voice"
+        assert cfg.channels["chat_support"].channel_type.value == "chat"
+
+    def test_fax_override_label_is_not_rejected_as_a_label(self):
+        """'fax' is rejected only as a DATA channel value, never as a
+        channel-override label.  The label is arbitrary; only channel_type is
+        restricted, so this config must load successfully."""
+        cfg = Config.from_dict({"channels": {"fax": {"channel_type": "voice"}}})
+        assert cfg.channels["fax"].channel_type.value == "voice"
+
+    def test_channel_type_still_restricted_to_voice_chat(self):
+        with pytest.raises(ValueError, match="invalid channel_type"):
+            Config.from_dict({"channels": {"inbound_calls": {"channel_type": "fax"}}})
+
+    def test_arbitrary_label_with_chat_channel_type_accepted(self):
+        cfg = Config.from_dict(
+            {"channels": {"backoffice": {"channel_type": "chat", "concurrency": 2}}}
+        )
+        assert cfg.channels["backoffice"].channel_type.value == "chat"
+        assert cfg.channels["backoffice"].concurrency == 2

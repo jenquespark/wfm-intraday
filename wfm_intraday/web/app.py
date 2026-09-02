@@ -12,17 +12,52 @@ Or::
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
+from collections.abc import Iterable
+from typing import Any
 
 import pandas as pd
 import streamlit as st
 
 from wfm_intraday import __version__, analyze, validate
 
+logger = logging.getLogger(__name__)
+
 st.set_page_config(page_title="WFM Intraday", layout="wide")
 st.title("WFM Intraday")
 st.caption(f"v{__version__} — Forecast vs actual gap analysis")
+
+
+def _present(value: Any) -> Any:
+    """Return a numeric value as-is, or a blank cell for missing (None) data.
+
+    A real zero (``0.0``) — zero actual volume, zero scheduled FTE, or a zero
+    staffing gap — is a legitimate value and MUST never render blank.  ``None``
+    means "missing" (future as-of actuals, no schedule row, not computed).
+    """
+    return value if value is not None else ""
+
+
+def _interval_table_rows(intervals: Iterable, limit: int = 200) -> list[dict[str, Any]]:
+    """Build the interval-analysis table rows shown in the UI (testable helper)."""
+    rows = []
+    for iv in intervals[:limit]:
+        rows.append(
+            {
+                "Date": iv.date,
+                "Interval": iv.interval_start,
+                "LOB": iv.lob,
+                "Chan": iv.channel,
+                "Fcst Vol": iv.forecast_volume,
+                "Actual Vol": _present(iv.actual_volume),
+                "Fcst AHT": iv.forecast_aht_seconds,
+                "Sched FTE": _present(iv.scheduled_fte),
+            }
+        )
+    return rows
+
 
 # Session state
 if "validated" not in st.session_state:
@@ -81,8 +116,9 @@ if validate_btn and uploaded_forecast and uploaded_actuals:
             st.session_state.validated = True
             st.session_state.warnings = []
             st.success(f"Validation OK — {report.matched_keys} matched keys")
-        except Exception as e:  # noqa: BLE001 — Streamlit UI boundary shows any error to the user
+        except Exception as e:
             st.session_state.validated = False
+            logger.exception("Validation failed")
             st.error(f"Validation failed: {e}")
 
 # ------------- Analyze -------------
@@ -139,20 +175,7 @@ if analyze_btn and st.session_state.validated and uploaded_forecast and uploaded
 
                 # Interval table
                 with st.expander("Interval Analysis", expanded=True):
-                    rows = []
-                    for iv in result.intervals[:200]:
-                        rows.append(
-                            {
-                                "Date": iv.date,
-                                "Interval": iv.interval_start,
-                                "LOB": iv.lob,
-                                "Chan": iv.channel,
-                                "Fcst Vol": iv.forecast_volume,
-                                "Actual Vol": iv.actual_volume or "",
-                                "Fcst AHT": iv.forecast_aht_seconds,
-                                "Sched FTE": iv.scheduled_fte or "",
-                            }
-                        )
+                    rows = _interval_table_rows(result.intervals)
                     st.dataframe(pd.DataFrame(rows), use_container_width=True)
                     if len(result.intervals) > 200:
                         st.caption(f"Showing 200 of {len(result.intervals)} intervals")
@@ -212,11 +235,9 @@ if analyze_btn and st.session_state.validated and uploaded_forecast and uploaded
                         mime="text/csv",
                     )
 
-            except Exception as e:  # noqa: BLE001 — Streamlit UI boundary shows any error to the user
+            except Exception as e:
+                logger.exception("Analysis failed")
                 st.error(f"Analysis failed: {e}")
-                import traceback
-
-                st.code(traceback.format_exc())
 
 # ------------- Footer help -------------
 if not st.session_state.validated:

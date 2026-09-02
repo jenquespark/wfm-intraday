@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from wfm_intraday.config import Config
-from wfm_intraday.erlang import required_positions
+from wfm_intraday.erlang import chat_required_positions, required_positions
 
 logger = logging.getLogger(__name__)
 
@@ -159,15 +159,28 @@ def generate_synthetic_data(output_dir: str = "data") -> None:
                     }
                 )
 
-                # Schedule: derived from forecast requirement for demo purposes
-                net = required_positions(
-                    calls_per_interval=forecast_volume,
-                    aht_seconds=aht,
-                    interval_seconds=INTERVAL_MINUTES * 60,
-                    service_level_target=config.service_level,
-                    sl_threshold_seconds=config.sl_threshold_seconds,
-                    max_occupancy=config.max_occupancy,
-                )["required_positions"]
+                # Schedule: derived from the SAME staffing model the production
+                # pipeline applies to that channel, so the sample shows
+                # realistic (near-balanced) staffing gaps:
+                #   voice -> Erlang C (service level / occupancy constrained)
+                #   chat  -> concurrency-aware capacity model
+                if channel == "chat":
+                    net = chat_required_positions(
+                        chats_per_interval=forecast_volume,
+                        aht_seconds=aht,
+                        interval_seconds=INTERVAL_MINUTES * 60,
+                        concurrency=config.chat_concurrency,
+                        occupancy_target=config.max_occupancy,
+                    )["required_positions"]
+                else:
+                    net = required_positions(
+                        calls_per_interval=forecast_volume,
+                        aht_seconds=aht,
+                        interval_seconds=INTERVAL_MINUTES * 60,
+                        service_level_target=config.service_level,
+                        sl_threshold_seconds=config.sl_threshold_seconds,
+                        max_occupancy=config.max_occupancy,
+                    )["required_positions"]
                 gross = net / (1.0 - config.shrinkage_pct)
                 schedule_rows.append(
                     {

@@ -4,12 +4,24 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 import pandas as pd
 
 from wfm_intraday.domain.models import AnalysisResult
 
 logger = logging.getLogger(__name__)
+
+
+def _present(value: Any) -> Any:
+    """Return a numeric value as-is, or a blank cell for missing (None) data.
+
+    A real zero (``0.0``) is a legitimate value and MUST never render blank.
+    ``None`` means "missing" — for actuals that is a future as-of interval
+    with no observed data, and for schedule/requirement fields it means the
+    value was not computed.
+    """
+    return value if value is not None else ""
 
 
 def write_interval_csv(path: str, result: AnalysisResult) -> str:
@@ -25,17 +37,17 @@ def write_interval_csv(path: str, result: AnalysisResult) -> str:
                 "channel": iv.channel,
                 "forecast_volume": iv.forecast_volume,
                 "forecast_aht_seconds": iv.forecast_aht_seconds,
-                "actual_volume": iv.actual_volume or "",
-                "actual_aht_seconds": iv.actual_aht_seconds or "",
-                "reforecast_volume": iv.reforecast_volume or "",
-                "forecast_required_net_fte": iv.forecast_required_net_fte or "",
-                "forecast_required_gross_fte": iv.forecast_required_gross_fte or "",
-                "actual_required_net_fte": iv.actual_required_net_fte or "",
-                "actual_required_gross_fte": iv.actual_required_gross_fte or "",
-                "reforecast_required_net_fte": iv.reforecast_required_net_fte or "",
-                "reforecast_required_gross_fte": iv.reforecast_required_gross_fte or "",
-                "scheduled_fte": iv.scheduled_fte or "",
-                "staffing_gap_fte": iv.staffing_gap_fte or "",
+                "actual_volume": _present(iv.actual_volume),
+                "actual_aht_seconds": _present(iv.actual_aht_seconds),
+                "reforecast_volume": _present(iv.reforecast_volume),
+                "forecast_required_net_fte": _present(iv.forecast_required_net_fte),
+                "forecast_required_gross_fte": _present(iv.forecast_required_gross_fte),
+                "actual_required_net_fte": _present(iv.actual_required_net_fte),
+                "actual_required_gross_fte": _present(iv.actual_required_gross_fte),
+                "reforecast_required_net_fte": _present(iv.reforecast_required_net_fte),
+                "reforecast_required_gross_fte": _present(iv.reforecast_required_gross_fte),
+                "scheduled_fte": _present(iv.scheduled_fte),
+                "staffing_gap_fte": _present(iv.staffing_gap_fte),
             }
         )
     pd.DataFrame(rows).to_csv(path, index=False)

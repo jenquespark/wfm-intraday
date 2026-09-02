@@ -35,10 +35,22 @@ max_movement_window_minutes: 120   # max minutes apart for a move
 # Default channel (voice / chat)
 channel: voice
 
-# Per-channel configuration overrides (optional)
+# ---------------------------------------------------------------------------
+# Per-channel configuration block (optional).
+#
+# The keys are ARBITRARY application labels (e.g. `inbound_calls`) — they are
+# NOT restricted to "voice"/"chat" and are never interpreted as input channel
+# values.  Only each entry's `channel_type` (and `concurrency` >= 1) is
+# validated.  The staffing MODEL applied to an input row is selected by the
+# row's `channel` value, which MUST be `voice` or `chat` (normalized,
+# case-insensitive); any other value hard-fails input validation.  In v0.2.1
+# the staffing parameters (chat_concurrency, service_level, shrinkage) are
+# global, so this block is validated, self-documenting configuration rather
+# than a source of per-channel parameter overrides.  See docs/channels.md.
+# ---------------------------------------------------------------------------
 # channels:
 #   inbound_calls:
 #     channel_type: voice
-#   chat:
+#   chat_support:
 #     channel_type: chat
 #     concurrency: 3

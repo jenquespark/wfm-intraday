@@ -30,6 +30,47 @@ EXIT_CALC_ERROR = 3
 EXIT_OUTPUT_ERROR = 4
 
 
+def _load_config_for_cli(config_path: str | None):
+    """Load the config for a CLI command, mapping every config failure to exit 1.
+
+    The CLI exit-code contract is:
+        * 0 = success
+        * 1 = config error (missing or malformed config file)
+        * 2 = input/validation error
+
+    Args:
+        config_path: Explicit ``--config`` path, or None to use ``config.yaml``
+            in the current directory (falling back to built-in defaults when
+            it does not exist).
+
+    Returns:
+        A ``(config, exit_code, used_defaults)`` tuple.  When *exit_code* is not
+        None the config is malformed or missing and the error has already been
+        printed to stderr — the caller must return it.  *used_defaults* is True
+        when no config file existed and built-in defaults were used.
+    """
+    from wfm_intraday.config import Config
+
+    if config_path is None:
+        try:
+            return Config.from_yaml("config.yaml"), None, False
+        except FileNotFoundError:
+            return Config(), None, True
+        except ValueError as e:
+            # A malformed default config.yaml must fail cleanly (exit 1),
+            # never raise a traceback.
+            print(f"ERROR: Invalid config: {e}", file=sys.stderr)
+            return None, EXIT_CONFIG_ERROR, False
+    try:
+        return Config.from_yaml(config_path), None, False
+    except FileNotFoundError:
+        print(f"ERROR: Config file not found: {config_path}", file=sys.stderr)
+        return None, EXIT_CONFIG_ERROR, False
+    except ValueError as e:
+        print(f"ERROR: Invalid config: {e}", file=sys.stderr)
+        return None, EXIT_CONFIG_ERROR, False
+
+
 def _common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--forecast", required=True, help="Forecast CSV path")
     parser.add_argument("--actual", required=True, dest="actuals", help="Actuals CSV path")
@@ -86,18 +127,24 @@ def cmd_validate(args: argparse.Namespace) -> int:
     Routes through the single strict public ``validate()`` service shared with
     analyze() and the web interface.  Duplicate keys, true key mismatches,
     NaN/inf/non-numeric values, malformed dates / interval_start / checkpoint,
-    and unsupported channels HARD-FAIL with exit 2.  Supports as-of mode with a
-    checkpoint (a genuinely future forecast-only interval is valid; a completed
-    interval missing an actual hard-fails).
+    and unsupported channels HARD-FAIL with exit 2.  A missing or malformed
+    config file returns exit 1.  Supports as-of mode with a checkpoint (a
+    genuinely future forecast-only interval is valid; a completed interval
+    missing an actual hard-fails).
     """
     from wfm_intraday import validate as run_validate
+
+    # Load config FIRST so config errors exit 1; only input errors exit 2.
+    config, cfg_error, _ = _load_config_for_cli(args.config)
+    if cfg_error is not None:
+        return cfg_error
 
     try:
         report = run_validate(
             args.forecast,
             args.actuals,
             args.staffing,
-            config_path=args.config,
+            config_obj=config,
             mode=args.mode,
             checkpoint=args.checkpoint,
             date_filter=args.date,
@@ -132,25 +179,14 @@ def cmd_validate(args: argparse.Namespace) -> int:
 def cmd_analyze(args: argparse.Namespace) -> int:
     """Run the full analysis pipeline."""
     from wfm_intraday import analyze as run_analysis
-    from wfm_intraday.config import Config
 
-    # Load config
-    config_path = args.config
-    if config_path is None:
-        try:
-            config = Config.from_yaml("config.yaml")
-        except FileNotFoundError:
-            config = Config()
-            print("Using built-in default configuration (config.yaml not found)")
-    else:
-        try:
-            config = Config.from_yaml(config_path)
-        except FileNotFoundError:
-            print(f"ERROR: Config file not found: {config_path}", file=sys.stderr)
-            return EXIT_CONFIG_ERROR
-        except ValueError as e:
-            print(f"ERROR: Invalid config: {e}", file=sys.stderr)
-            return EXIT_CONFIG_ERROR
+    # Load config — every config failure (missing OR malformed default
+    # config.yaml included) returns exit 1 without a traceback.
+    config, cfg_error, used_defaults = _load_config_for_cli(args.config)
+    if cfg_error is not None:
+        return cfg_error
+    if used_defaults:
+        print("Using built-in default configuration (config.yaml not found)")
 
     # Run analysis
     try:

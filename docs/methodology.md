@@ -42,7 +42,7 @@ estimation, not chat‑specific SLA guarantees.
 
 ## Async staffing
 
-Async/back-office staffing is not supported in version 0.2.  See
+Async/back-office staffing is not supported in version 0.2.1.  See
 `docs/limitations.md`.
 
 ## Reforecast

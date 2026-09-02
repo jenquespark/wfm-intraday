@@ -200,6 +200,79 @@ class TestCLI:
             result = _run(["analyze", "--forecast", str(fc), "--actual", str(ac), "--date", bad])
             assert result.returncode == 2, f"date={bad} rc={result.returncode}"
 
+    def test_validate_explicit_invalid_config_returns_1(self, tmp_path):
+        """validate with an explicit malformed --config exits 1 (config error)."""
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast")
+        _write_csv(ac, "actuals")
+        cfg = tmp_path / "bad.yaml"
+        cfg.write_text("totally_unknown_setting: 42\n")
+        result = _run(
+            ["validate", "--forecast", str(fc), "--actual", str(ac), "--config", str(cfg)]
+        )
+        assert result.returncode == 1, f"stderr={result.stderr}"
+        assert "Traceback" not in result.stderr
+
+    def test_validate_missing_config_returns_1(self, tmp_path):
+        """validate with a missing --config path exits 1 (config error)."""
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast")
+        _write_csv(ac, "actuals")
+        result = _run(
+            [
+                "validate",
+                "--forecast",
+                str(fc),
+                "--actual",
+                str(ac),
+                "--config",
+                str(tmp_path / "does_not_exist.yaml"),
+            ]
+        )
+        assert result.returncode == 1
+        assert "Traceback" not in result.stderr
+
+    def test_analyze_malformed_default_config_returns_1(self, tmp_path):
+        """A malformed default config.yaml in cwd exits 1, never a traceback."""
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast")
+        _write_csv(ac, "actuals")
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("shrinnkage_pct: 0.30\n")  # misspelled key -> ValueError
+        result = _run(
+            [
+                "analyze",
+                "--forecast",
+                str(fc),
+                "--actual",
+                str(ac),
+                "--output-dir",
+                str(tmp_path / "out"),
+            ],
+            cwd=tmp_path,
+        )
+        assert result.returncode == 1, f"stderr={result.stderr}"
+        assert "Traceback" not in result.stderr
+        assert "Unknown config key" in result.stderr
+
+    def test_validate_malformed_default_config_returns_1(self, tmp_path):
+        """validate with a malformed default config.yaml in cwd exits 1."""
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast")
+        _write_csv(ac, "actuals")
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("totally_unknown_setting: 42\n")
+        result = _run(
+            ["validate", "--forecast", str(fc), "--actual", str(ac)],
+            cwd=tmp_path,
+        )
+        assert result.returncode == 1, f"stderr={result.stderr}"
+        assert "Unknown config key" in result.stderr
+
     def test_output_dir_failure_exit_4(self, tmp_path):
         """When the output directory cannot be created, exit is 4."""
         fc = tmp_path / "fc.csv"

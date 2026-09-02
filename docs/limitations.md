@@ -34,7 +34,7 @@ learn intra‑day arrival patterns or apply advanced time‑series models.
 
 ## Async not supported
 
-Async/back-office staffing is not supported in version 0.2.  Any input row
+Async/back-office staffing is not supported in version 0.2.1.  Any input row
 with `channel=async` is rejected.  Voice and chat are the supported channels.
 
 ## No DST or timezone handling
