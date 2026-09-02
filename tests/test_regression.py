@@ -1234,6 +1234,38 @@ class TestMalformedColumnMappingTypes:
         with pytest.raises(ValueError, match="column_mapping\\[forecast\\] must be a dict"):
             Config.from_dict({"column_mapping": {"forecast": "bad"}})
 
+    def test_missing_source_column_hard_fails(self):
+        """A mapping that references a source column absent from the CSV fails.
+
+        The adapter keeps only canonical columns; a mapped source column that
+        does not exist in the file leaves a required canonical absent, which
+        is reported as a hard error (missing required columns).
+        """
+        from wfm_intraday.adapters.generic_csv import GenericCSVAdapter
+
+        tmp = tempfile.mkdtemp()
+        # Mapped CSV uses "FCast" and "AHT" but omits nothing structurally;
+        # here the source header differs from the mapping (missing "AHT").
+        fc_path = os.path.join(tmp, "fc.csv")
+        with open(fc_path, "w") as f:
+            f.write(
+                "Contact Date,Queue,Slot,Chan,FCast\n"
+                "2026-09-01,inbound,08:00,voice,100.0\n"  # missing "AHT" source col
+            )
+        mapping = {
+            "forecast": {
+                "date": "Contact Date",
+                "lob": "Queue",
+                "interval_start": "Slot",
+                "channel": "Chan",
+                "forecast_volume": "FCast",
+                "forecast_aht_seconds": "AHT",  # source column absent in CSV
+            }
+        }
+        adapter = GenericCSVAdapter(mapping)
+        with pytest.raises(ValueError, match="forecast_aht_seconds|Required columns missing"):
+            adapter.load_forecast(fc_path)
+
 
 class TestScopeFiltersBeforeReconciliation:
     """date_filter and lob_filter scope inputs BEFORE reconciliation.
