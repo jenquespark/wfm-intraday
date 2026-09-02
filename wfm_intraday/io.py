@@ -1,8 +1,11 @@
-"""CSV input loaders and forecast/actual merge for WFM Intraday.
+"""CSV input loaders for WFM Intraday.
 
 The *writers* live in :mod:`wfm_intraday.reporting` and consume a single
-canonical ``AnalysisResult``.  This module retains only the legacy low-level
-loaders and the merge helper.
+canonical ``AnalysisResult``.  This module retains only the low-level
+loaders.  The production merge path lives in :mod:`wfm_intraday` as a
+LEFT join (forecast spine preserved).  The legacy ``io.merge_forecast_actuals``
+inner-join / warning-only path has been removed — use
+:func:`wfm_intraday.analyze` for production analysis.
 """
 
 from __future__ import annotations
@@ -74,96 +77,3 @@ def load_schedule(path: str) -> pd.DataFrame:
     Expected columns: date, lob, interval_start, channel, scheduled_fte
     """
     return load_csv(path, SCHEDULE_COLUMNS)
-
-
-# ---------------------------------------------------------------------------
-# Merge
-# ---------------------------------------------------------------------------
-
-
-def merge_forecast_actuals(
-    forecast_df: pd.DataFrame,
-    actuals_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, ReconciliationReport]:
-    """Merge forecast and actuals dataframes.
-
-    Uses an inner join on (date, lob, interval_start, channel).  Key
-    mismatches are reported in the ``ReconciliationReport`` rather than
-    silently dropped.
-
-    Args:
-        forecast_df: Forecast dataframe.
-        actuals_df:  Actuals dataframe.
-
-    Returns:
-        tuple of (merged DataFrame, ReconciliationReport).
-    """
-    # Build reconciliation
-    fc_keys = set(
-        zip(
-            forecast_df["date"],
-            forecast_df["lob"],
-            forecast_df["interval_start"],
-            forecast_df.get("channel", ""),
-        )
-    )
-    ac_keys = set(
-        zip(
-            actuals_df["date"],
-            actuals_df["lob"],
-            actuals_df["interval_start"],
-            actuals_df.get("channel", ""),
-        )
-    )
-
-    matched = fc_keys & ac_keys
-    forecast_only = fc_keys - ac_keys
-    actual_only = ac_keys - fc_keys
-
-    logger.info("Merging forecast and actuals data")
-    logger.info(
-        "Key reconciliation: %d matched, %d forecast-only, %d actual-only",
-        len(matched),
-        len(forecast_only),
-        len(actual_only),
-    )
-
-    if forecast_only:
-        logger.warning(
-            "Forecast-only keys (not in actuals): %d — these will be dropped", len(forecast_only)
-        )
-    if actual_only:
-        logger.warning(
-            "Actual-only keys (not in forecast): %d — these will be dropped", len(actual_only)
-        )
-
-    merged = forecast_df.merge(
-        actuals_df,
-        on=["date", "lob", "interval_start", "channel"],
-        how="inner",
-        suffixes=("", "_actual"),
-    )
-
-    reconciliation = ReconciliationReport(
-        forecast_rows=len(forecast_df),
-        actual_rows=len(actuals_df),
-        scheduled_rows=0,
-        matched_keys=len(merged),
-        forecast_only=sorted(str(k) for k in forecast_only),
-        actual_only=sorted(str(k) for k in actual_only),
-        schedule_only=[],
-    )
-
-    if merged.empty:
-        raise ValueError(
-            "Forecast and actuals data have no overlapping "
-            "(date, lob, interval_start, channel) records"
-        )
-
-    # Ensure column naming consistency
-    for col in ["actual_aht_seconds", "actual_volume"]:
-        alt = col + "_actual"
-        if col not in merged.columns and alt in merged.columns:
-            merged.rename(columns={alt: col}, inplace=True)
-
-    return merged, reconciliation

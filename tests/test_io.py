@@ -19,7 +19,7 @@ from wfm_intraday.domain.models import (
     AnalysisResult,
     IntervalRecord,
 )
-from wfm_intraday.io import load_csv, load_forecast, merge_forecast_actuals
+from wfm_intraday.io import load_csv, load_forecast
 from wfm_intraday.models import validate_columns
 
 
@@ -58,55 +58,20 @@ class TestLoadCSV:
             load_csv(str(p), FORECAST_COLUMNS)
 
 
-class TestMergeForecastActuals:
-    def test_merge_matched(self):
-        fc = pd.DataFrame(
-            {
-                "date": ["2026-05-04"],
-                "lob": ["inbound"],
-                "interval_start": ["08:00"],
-                "channel": ["voice"],
-                "forecast_volume": [100.0],
-                "forecast_aht_seconds": [180.0],
-            }
-        )
-        ac = pd.DataFrame(
-            {
-                "date": ["2026-05-04"],
-                "lob": ["inbound"],
-                "interval_start": ["08:00"],
-                "channel": ["voice"],
-                "actual_volume": [110.0],
-                "actual_aht_seconds": [185.0],
-            }
-        )
-        merged, report = merge_forecast_actuals(fc, ac)
-        assert len(merged) == 1
-        assert report.matched_keys == 1
+class TestMergeForecastActualsRemoved:
+    def test_merge_helper_removed_from_io(self):
+        """The legacy io.merge_forecast_actuals (inner-join + warning-only) has been removed.
 
-    def test_empty_merge_raises(self):
-        fc = pd.DataFrame(
-            {
-                "date": ["2026-05-04"],
-                "lob": ["inbound"],
-                "interval_start": ["08:00"],
-                "channel": ["voice"],
-                "forecast_volume": [100.0],
-                "forecast_aht_seconds": [180.0],
-            }
+        The production merge lives in :mod:`wfm_intraday` (LEFT join + hard
+        reconciliation).  Using the removed helper must fail so callers cannot
+        accidentally reach the old lossy path.
+        """
+        from wfm_intraday import io as io_module
+
+        assert not hasattr(io_module, "merge_forecast_actuals"), (
+            "io.merge_forecast_actuals must remain removed. "
+            "Use wfm_intraday.analyze for production merging."
         )
-        ac = pd.DataFrame(
-            {
-                "date": ["2026-05-05"],
-                "lob": ["inbound"],
-                "interval_start": ["08:00"],
-                "channel": ["voice"],
-                "actual_volume": [110.0],
-                "actual_aht_seconds": [185.0],
-            }
-        )
-        with pytest.raises(ValueError, match="no overlapping"):
-            merge_forecast_actuals(fc, ac)
 
 
 def _make_result(num_intervals: int = 3) -> AnalysisResult:
