@@ -29,7 +29,7 @@ Example config::
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
+from typing import Optional
 
 import pandas as pd
 
@@ -53,7 +53,7 @@ class GenericCSVAdapter(InputAdapter):
 
     name = "generic_csv"
 
-    def __init__(self, column_mapping: Optional[Dict[str, Dict[str, str]]] = None):
+    def __init__(self, column_mapping: dict[str, dict[str, str]] | None = None):
         self._mapping = column_mapping or {}
 
     @classmethod

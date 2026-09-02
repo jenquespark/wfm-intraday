@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Type
 
 import pandas as pd
 
@@ -44,10 +43,10 @@ class InputAdapter(ABC):
 # Registry
 # ---------------------------------------------------------------------------
 
-_adapters: List[Type[InputAdapter]] = []
+_adapters: list[type[InputAdapter]] = []
 
 
-def register_adapter(adapter_cls: Type[InputAdapter]) -> Type[InputAdapter]:
+def register_adapter(adapter_cls: type[InputAdapter]) -> type[InputAdapter]:
     """Register an adapter class so it can be auto-detected."""
     _adapters.append(adapter_cls)
     return adapter_cls
@@ -63,4 +62,5 @@ def get_adapter(source_hint: str = "") -> InputAdapter:
             return cls()
     # Fallback to generic CSV
     from wfm_intraday.adapters.generic_csv import GenericCSVAdapter
+
     return GenericCSVAdapter()

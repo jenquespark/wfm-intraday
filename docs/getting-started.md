@@ -74,8 +74,12 @@ wfm-intraday web
 ```python
 from wfm_intraday import analyze, validate
 
-result = analyze("data/forecast.csv", "data/actuals.csv",
-                 staffing_path="data/schedule.csv",
-                 mode="as-of", checkpoint="12:00")
+result = analyze(
+    "data/forecast.csv",
+    "data/actuals.csv",
+    staffing_path="data/schedule.csv",
+    mode="as-of",
+    checkpoint="12:00",
+)
 print(result.forecast_accuracy["overall"]["wape"])
 ```

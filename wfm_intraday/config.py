@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any
 
 import yaml
 
@@ -22,12 +22,15 @@ class ChannelType(str, Enum):
 
     ``VOICE``   — Classical Erlang C queueing (service level, ASA, occupancy).
     ``CHAT``    — Concurrency-aware (agents handle multiple chats at once).
-    ``ASYNC``   — Workload / capacity model (back-office, email, processing).
     """
 
     VOICE = "voice"
     CHAT = "chat"
-    ASYNC = "async"
+
+
+# Channels reachable through the public pipeline in v0.2.1.  Async is
+# intentionally excluded — it is experimental and unreachable via CLI/web/API.
+SUPPORTED_CHANNELS = frozenset({"voice", "chat"})
 
 
 @dataclass(frozen=True)
@@ -47,7 +50,7 @@ class ChannelConfig:
     enabled: bool = True
 
     def validate(self) -> None:
-        errors: List[str] = []
+        errors: list[str] = []
         if self.concurrency < 1:
             errors.append(f"concurrency must be >= 1, got {self.concurrency}")
         if errors:
@@ -90,12 +93,6 @@ class Config:
     chat_sl_threshold_seconds: int = 60  # chat SLA is usually longer
 
     # ------------------------------------------------------------------
-    # Async / back-office
-    # ------------------------------------------------------------------
-    async_service_hours_per_day: float = 8.0
-    async_sla_business_days: float = 1.0
-
-    # ------------------------------------------------------------------
     # Gap thresholds
     # ------------------------------------------------------------------
     understaff_threshold_pct: float = 0.10
@@ -104,7 +101,6 @@ class Config:
     # ------------------------------------------------------------------
     # Reforecast
     # ------------------------------------------------------------------
-    reforecast_checkpoint_interval: int = 10
     reforecast_blend_factor: float = 0.50
 
     # ------------------------------------------------------------------
@@ -121,17 +117,19 @@ class Config:
     # ------------------------------------------------------------------
     # Per-channel configuration overrides
     # ------------------------------------------------------------------
-    channels: Dict[str, ChannelConfig] = field(default_factory=dict)
+    channels: dict[str, ChannelConfig] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
     def validate(self) -> None:
         """Raise ``ValueError`` if any config value is out of range."""
-        errors: List[str] = []
+        errors: list[str] = []
 
         if self.interval_length_minutes <= 0:
-            errors.append(f"interval_length_minutes must be > 0, got {self.interval_length_minutes}")
+            errors.append(
+                f"interval_length_minutes must be > 0, got {self.interval_length_minutes}"
+            )
         if self.aht_seconds <= 0:
             errors.append(f"aht_seconds must be > 0, got {self.aht_seconds}")
         if not 0 <= self.shrinkage_pct < 1:
@@ -144,25 +142,29 @@ class Config:
             errors.append(f"max_occupancy must be in [0, 1], got {self.max_occupancy}")
         if self.chat_concurrency < 1:
             errors.append(f"chat_concurrency must be >= 1, got {self.chat_concurrency}")
-        if self.async_service_hours_per_day <= 0:
-            errors.append(f"async_service_hours_per_day must be > 0, got {self.async_service_hours_per_day}")
-        if self.async_sla_business_days <= 0:
-            errors.append(f"async_sla_business_days must be > 0, got {self.async_sla_business_days}")
         if not 0 <= self.understaff_threshold_pct <= 1:
-            errors.append(f"understaff_threshold_pct must be in [0, 1], got {self.understaff_threshold_pct}")
+            errors.append(
+                f"understaff_threshold_pct must be in [0, 1], got {self.understaff_threshold_pct}"
+            )
         if not 0 <= self.overstaff_threshold_pct <= 1:
-            errors.append(f"overstaff_threshold_pct must be in [0, 1], got {self.overstaff_threshold_pct}")
-        if self.reforecast_checkpoint_interval < 0:
-            errors.append(f"reforecast_checkpoint_interval must be >= 0, got {self.reforecast_checkpoint_interval}")
+            errors.append(
+                f"overstaff_threshold_pct must be in [0, 1], got {self.overstaff_threshold_pct}"
+            )
         if not 0 <= self.reforecast_blend_factor <= 1:
-            errors.append(f"reforecast_blend_factor must be in [0, 1], got {self.reforecast_blend_factor}")
+            errors.append(
+                f"reforecast_blend_factor must be in [0, 1], got {self.reforecast_blend_factor}"
+            )
         if self.max_movement_window_intervals < 0:
-            errors.append(f"max_movement_window_intervals must be >= 0, got {self.max_movement_window_intervals}")
+            errors.append(
+                f"max_movement_window_intervals must be >= 0, got {self.max_movement_window_intervals}"
+            )
         if self.max_movement_window_minutes < 0:
-            errors.append(f"max_movement_window_minutes must be >= 0, got {self.max_movement_window_minutes}")
+            errors.append(
+                f"max_movement_window_minutes must be >= 0, got {self.max_movement_window_minutes}"
+            )
 
-        if self.channel not in ("voice", "chat", "async"):
-            errors.append(f"channel must be 'voice', 'chat', or 'async', got '{self.channel}'")
+        if self.channel not in ("voice", "chat"):
+            errors.append(f"channel must be 'voice' or 'chat', got '{self.channel}'")
 
         # Validate per-channel configs
         for ch_name, ch_cfg in self.channels.items():
@@ -178,7 +180,7 @@ class Config:
     # Factory methods
     # ------------------------------------------------------------------
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "Config":
+    def from_dict(cls, d: dict[str, Any]) -> Config:
         """Create Config from a dictionary (e.g. parsed YAML).
 
         Unknown keys are silently ignored, but KNOWN keys that are misspelled
@@ -187,7 +189,7 @@ class Config:
         # Build dict of known fields, converting channels dict if present
         known_keys = set(cls.__dataclass_fields__.keys())
 
-        filtered: Dict[str, Any] = {}
+        filtered: dict[str, Any] = {}
         for k, v in d.items():
             if k in known_keys:
                 filtered[k] = v
@@ -198,7 +200,7 @@ class Config:
 
         # Convert channels dict to typed ChannelConfig objects
         if "channels" in filtered and isinstance(filtered["channels"], dict):
-            channels: Dict[str, ChannelConfig] = {}
+            channels: dict[str, ChannelConfig] = {}
             for ch_name, ch_data in filtered["channels"].items():
                 if isinstance(ch_data, dict):
                     ct = ChannelType(ch_data.get("channel_type", "voice"))
@@ -216,7 +218,7 @@ class Config:
         return cfg
 
     @classmethod
-    def from_yaml(cls, path: str) -> "Config":
+    def from_yaml(cls, path: str) -> Config:
         """Load config from a YAML file using ``yaml.safe_load``."""
         logger.info("Loading config from %s", path)
         with open(path) as f:
@@ -227,14 +229,14 @@ class Config:
         return cls.from_dict(data)
 
     @classmethod
-    def _legacy_aliases(cls) -> Dict[str, str]:
+    def _legacy_aliases(cls) -> dict[str, str]:
         """Map old key names to new ones."""
         return {
             "interval_length": "interval_length_minutes",
         }
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {}
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {}
         for field_name in self.__dataclass_fields__:
             val = getattr(self, field_name)
             if field_name == "channels":

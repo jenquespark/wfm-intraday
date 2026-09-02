@@ -6,12 +6,12 @@ Reference values are computed independently to verify correctness.
 from __future__ import annotations
 
 import math
+
 from wfm_intraday.erlang import (
+    chat_required_positions,
     erlang_c_pw,
     required_positions,
     service_level_probability,
-    chat_required_positions,
-    async_required_positions,
 )
 
 
@@ -106,14 +106,3 @@ class TestChatRequiredPositions:
         r2 = chat_required_positions(100.0, 120, 1800, 4, 0.85)
         # Higher concurrency → fewer agents needed
         assert r2["required_positions"] <= r1["required_positions"]
-
-
-class TestAsyncRequiredPositions:
-    def test_zero_load(self):
-        result = async_required_positions(0.0, 180, 8.0, 1.0)
-        assert result["required_positions"] == 0.0
-
-    def test_positive_load(self):
-        result = async_required_positions(100.0, 180, 8.0, 1.0)
-        # 100 * 180 / (8 * 3600) = 0.625 → ceil = 1
-        assert result["required_positions"] >= 1

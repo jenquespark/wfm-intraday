@@ -6,19 +6,21 @@ Usage::
 
     result = analyze("forecast.csv", "actuals.csv", mode="as-of", checkpoint="12:00")
     print(result.forecast_accuracy["overall"]["wape"])
+
+This module is the *single* analysis service shared by the CLI, the web
+interface, and the public Python API.  No other module re-implements the
+pipeline.
 """
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
-
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
-import numpy as np
 import pandas as pd
 
-from wfm_intraday.config import Config
+from wfm_intraday._version import __version__
+from wfm_intraday.config import SUPPORTED_CHANNELS, Config
 from wfm_intraday.domain.models import (
     AnalysisResult,
     IntervalRecord,
@@ -27,19 +29,25 @@ from wfm_intraday.domain.models import (
     StaffingGap,
 )
 from wfm_intraday.metrics import calculate_all, calculate_per_lob
-from wfm_intraday.validation.inputs import validate_input_files, reconcile_keys
+from wfm_intraday.validation.inputs import (
+    reconcile_keys,
+    require_no_mismatch,
+    validate_input_files,
+)
 
 logger = logging.getLogger(__name__)
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+_SUPPORTED_MODES = ("retrospective", "as-of")
+
 
 def validate(
     forecast_path: str,
     actuals_path: str,
-    staffing_path: Optional[str] = None,
-    column_mapping: Optional[Dict[str, str]] = None,
+    staffing_path: str | None = None,
+    column_mapping: dict[str, str] | None = None,
 ) -> ReconciliationReport:
     """Validate input files and return a reconciliation report.
 
@@ -54,51 +62,30 @@ def validate(
 
     Raises:
         FileNotFoundError: If a required input file is missing.
-        ValueError: If input columns or values are invalid.
+        ValueError: If input columns, values, or duplicates are invalid.
     """
-    fc_df, ac_df, sd_df, warns = validate_input_files(
+    fc_df, ac_df, sd_df, _warns = validate_input_files(
         forecast_path, actuals_path, staffing_path, column_mapping=column_mapping
     )
-    report = reconcile_keys(fc_df, ac_df, sd_df)
-
-    print("=== INPUT VALIDATION ===")
-    print(f"  Forecast: {report.forecast_rows} rows")
-    print(f"  Actuals:  {report.actual_rows} rows")
-    if sd_df is not None:
-        print(f"  Staffing: {report.scheduled_rows} rows")
-    else:
-        print("  Staffing: not provided")
-    print(f"  Matched keys: {report.matched_keys}")
-    if report.has_mismatch:
-        if report.forecast_only:
-            print(f"  WARNING: {len(report.forecast_only)} forecast-only keys")
-        if report.actual_only:
-            print(f"  WARNING: {len(report.actual_only)} actual-only keys")
-    if warns:
-        for w in warns:
-            print(f"  WARNING: {w}")
-
-    if report.has_mismatch or warns:
-        print("  Status: PASSED WITH WARNINGS")
-    else:
-        print("  Status: OK")
-
-    return report
+    return reconcile_keys(fc_df, ac_df, sd_df)
 
 
 def analyze(
     forecast_path: str,
     actuals_path: str,
-    staffing_path: Optional[str] = None,
-    config_path: Optional[str] = None,
-    config_obj: Optional[Config] = None,
-    column_mapping: Optional[Dict[str, str]] = None,
-    lob_filter: Optional[str] = None,
-    date_filter: Optional[str] = None,
-    checkpoint: Optional[str] = None,
+    staffing_path: str | None = None,
+    config_path: str | None = None,
+    config_obj: Config | None = None,
+    column_mapping: dict[str, str] | None = None,
+    lob_filter: str | None = None,
+    date_filter: str | None = None,
+    checkpoint: str | None = None,
     mode: str = "retrospective",
 ) -> AnalysisResult:
     """Run the full WFM analysis pipeline.
+
+    This is the single shared service used by the CLI, web interface, and
+    Python API.
 
     Args:
         forecast_path: Path to forecast CSV.
@@ -117,8 +104,15 @@ def analyze(
 
     Raises:
         FileNotFoundError: If a required input file is missing.
-        ValueError: If input is invalid.
+        ValueError: If input is invalid, keys mismatch, or as-of mode is used
+            without a checkpoint.
     """
+    # ── 0. Validate request-level arguments ─────────────────────────────
+    if mode not in _SUPPORTED_MODES:
+        raise ValueError(f"mode must be one of {_SUPPORTED_MODES}, got '{mode}'")
+    if mode == "as-of" and checkpoint is None:
+        raise ValueError("mode='as-of' requires a checkpoint time (HH:MM)")
+
     # ── 1. Load config ─────────────────────────────────────────────────
     config = _load_config(config_obj, config_path)
 
@@ -127,6 +121,10 @@ def analyze(
         forecast_path, actuals_path, staffing_path, column_mapping=column_mapping
     )
     report = reconcile_keys(fc_df, ac_df, sd_df)
+
+    # Key mismatches hard-fail.  In as-of mode, forecast-only keys are allowed
+    # (future intervals); actual-only keys always fail.
+    require_no_mismatch(report, mode=mode)
 
     # ── 3. Filter ─────────────────────────────────────────────────────
     if date_filter:
@@ -141,51 +139,68 @@ def analyze(
         if sd_df is not None:
             sd_df = sd_df[sd_df["lob"] == lob_filter].copy()
 
-    # ── 4. Resolve checkpoint ──────────────────────────────────────────
-    checkpoint_interval_idx: Optional[int] = None
-    if checkpoint:
+    # ── 4. Resolve checkpoint (single authority = the request parameter) ─
+    #    Completion is KEY/TIME based: an interval is completed iff its end
+    #    time (interval_start + interval_length) is <= the checkpoint clock
+    #    time.  There is no positional or modulo masking.
+    checkpoint_minutes: int | None = None
+    if checkpoint is not None:
         checkpoint_minutes = _parse_time(checkpoint)
-        checkpoint_interval_idx = _resolve_checkpoint_idx(fc_df, checkpoint_minutes, config)
 
-    # ── 5. Merge forecast + actuals ───────────────────────────────────
+    # ── 5. Merge forecast + actuals (LEFT join => forecast spine preserved) ─
+    #    Every forecast interval is retained.  Intervals with no matching
+    #    actual row have NaN actual_volume / actual_aht_seconds.
     merged_df = fc_df.merge(
         ac_df,
         on=["date", "lob", "interval_start", "channel"],
-        how="inner",
+        how="left",
         suffixes=("", "_actual"),
     )
+    # Normalize column names (left join with matching names keeps names).
+    if "actual_volume_actual" in merged_df.columns and "actual_volume" not in merged_df.columns:
+        merged_df = merged_df.rename(
+            columns={
+                "actual_volume_actual": "actual_volume",
+                "actual_aht_seconds_actual": "actual_aht_seconds",
+            }
+        )
 
-    # ── 6. Apply as-of masking ────────────────────────────────────────
-    #    In as-of mode, "unknown" future values are set to NaN (not zero).
-    #    Zero volume is valid operational data; NaN means "not yet observed."
-    as_of_mask: Optional[pd.Series] = None
-    if mode == "as-of" and checkpoint_interval_idx is not None:
-        as_of_mask = _build_as_of_mask(merged_df, config, checkpoint_interval_idx)
+    # ── 6. Build a key/time completion frame ──────────────────────────
+    completed_mask = _build_completed_mask(merged_df, config, mode, checkpoint_minutes)
 
-    # ── 7. Compute forecast accuracy (before masking for proper scope) ─
-    forecast_accuracy = _compute_forecast_accuracy(merged_df, mode, as_of_mask)
+    # ── 7. Compute forecast accuracy (as-of scoped to completed) ──────
+    forecast_accuracy = _compute_forecast_accuracy(merged_df, mode, completed_mask)
 
-    # ── 8. Compute reforecast (uses actuals only up to checkpoint) ────
-    reforecast_results = _compute_reforecast(fc_df, ac_df, config, as_of_mask, mode)
+    # ── 8. Compute reforecast (masked to completed actuals only) ──────
+    reforecast_results = _compute_reforecast(merged_df, config, mode, completed_mask)
 
-    # ── 9. Build interval records (fully populated) ───────────────────
+    # ── 9. Build interval records (full forecast spine) ───────────────
     intervals = _build_intervals(
-        merged_df, config, reforecast_results, sd_df,
-        as_of_mask=as_of_mask, mode=mode,
+        merged_df,
+        config,
+        reforecast_results,
+        sd_df,
+        completed_mask=completed_mask,
+        mode=mode,
     )
 
     # ── 10. Compute staffing gaps ──────────────────────────────────────
     gaps = _compute_staffing_gaps(
-        merged_df, config, reforecast_results, sd_df,
-        as_of_mask=as_of_mask, mode=mode,
+        merged_df,
+        config,
+        reforecast_results,
+        sd_df,
+        completed_mask=completed_mask,
+        mode=mode,
     )
 
     # ── 11. Redistribution (uses canonical gaps) ───────────────────────
     from wfm_intraday.calculator import calculate_redistribution as _calc_redist
-    redistribution = _calc_redist(gaps, config)
+
+    redistribution = _calc_redist(gaps, config, mode=mode, checkpoint_minutes=checkpoint_minutes)
 
     # ── 12. Build result ───────────────────────────────────────────────
-    metadata: Dict[str, Any] = {
+    metadata: dict[str, Any] = {
         "version": __version__,
         "mode": mode,
         "date": date_filter or "all",
@@ -210,6 +225,7 @@ def analyze(
 def generate_sample_data(output_dir: str = "data") -> None:
     """Generate synthetic sample data in *output_dir*."""
     from wfm_intraday.sample_data import generate_synthetic_data
+
     generate_synthetic_data(output_dir)
 
 
@@ -218,7 +234,7 @@ def generate_sample_data(output_dir: str = "data") -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 
-def _load_config(config_obj: Optional[Config], config_path: Optional[str]) -> Config:
+def _load_config(config_obj: Config | None, config_path: str | None) -> Config:
     if config_obj is not None:
         return config_obj
     if config_path:
@@ -230,51 +246,66 @@ def _load_config(config_obj: Optional[Config], config_path: Optional[str]) -> Co
 
 
 def _parse_time(t: str) -> int:
-    """Parse HH:MM to minutes since midnight."""
-    parts = t.split(":")
-    return int(parts[0]) * 60 + int(parts[1])
+    """Parse HH:MM (or HH:MM:SS best-effort) to minutes since midnight."""
+    parts = t.strip().split(":")
+    if len(parts) < 2:
+        raise ValueError(f"checkpoint must be HH:MM, got '{t}'")
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+    except ValueError:
+        raise ValueError(f"checkpoint must be HH:MM, got '{t}'")
+    return hours * 60 + minutes
 
 
-def _resolve_checkpoint_idx(
-    fc_df: pd.DataFrame, checkpoint_minutes: int, config: Config,
-) -> int:
-    """Convert a checkpoint time (minutes since midnight) to an interval index.
+def _interval_end_minutes(interval_start: str, config: Config) -> int:
+    """Minutes since midnight of an interval's END time."""
+    start = _parse_time(interval_start)
+    return start + config.interval_length_minutes
 
-    Returns the count of intervals fully completed at or before the
-    checkpoint time within each day.  Uses the smallest returned value
-    across dates (conservative).
+
+def _build_completed_mask(
+    merged_df: pd.DataFrame,
+    config: Config,
+    mode: str,
+    checkpoint_minutes: int | None,
+) -> pd.Series | None:
+    """Return a boolean Series (aligned to merged_df) where True == completed.
+
+    Completion is key/time based: an interval is *completed* iff its end time
+    is <= the checkpoint clock time.  In retrospective mode every row is
+    considered completed (or, if actuals are missing for that key, completed
+    with an unknown/NaN actual — which downstream treats as zero requirement
+    only when the value is genuinely missing, not zero).
+
+    Returns None for retrospective mode (everything completed).
     """
-    interval_length = config.interval_length_minutes
-    interval_end = checkpoint_minutes
-    # Count intervals that end at or before checkpoint
-    idx = interval_end // interval_length
-    return max(0, idx)
+    if mode != "as-of" or checkpoint_minutes is None:
+        return None
 
-
-def _build_as_of_mask(
-    merged_df: pd.DataFrame, config: Config, checkpoint_idx: int,
-) -> pd.Series:
-    """Build a boolean mask: True = completed (actual data available)."""
-    pattern = r"(\d+):(\d+)"
-    extracted = merged_df["interval_start"].str.extract(pattern)
-    minutes = extracted[0].astype(int) * 60 + extracted[1].astype(int)
-    interval_length = config.interval_length_minutes
-    # An interval is "completed" if its end time ≤ checkpoint
-    interval_end = minutes + interval_length
-    checkpoint_minutes = checkpoint_idx * interval_length
-    return interval_end <= checkpoint_minutes
+    end_minutes = merged_df["interval_start"].apply(lambda s: _interval_end_minutes(str(s), config))
+    return end_minutes <= checkpoint_minutes
 
 
 def _compute_forecast_accuracy(
     merged_df: pd.DataFrame,
     mode: str,
-    as_of_mask: Optional[pd.Series],
-) -> Dict[str, Any]:
-    """Compute forecast accuracy, scoped to appropriate intervals."""
-    if mode == "as-of" and as_of_mask is not None:
-        df = merged_df.loc[as_of_mask].copy()
-    else:
-        df = merged_df
+    completed_mask: pd.Series | None,
+) -> dict[str, Any]:
+    """Compute forecast accuracy, scoped to completed intervals in as-of mode.
+
+    Rows with NaN actual_volume (missing actuals) are excluded so they do not
+    contaminate accuracy metrics.
+    """
+    df = merged_df.copy()
+    # Drop rows where actual volume is genuinely missing.
+    df = df[df["actual_volume"].notna()]
+
+    if mode == "as-of" and completed_mask is not None:
+        df = df.loc[completed_mask.reindex(df.index)]
+
+    if df.empty:
+        return {"per_lob": {}, "overall": {"wape": 0.0, "mape": 0.0, "bias": 0.0}}
 
     per_lob = calculate_per_lob(df)
     overall = calculate_all(
@@ -295,126 +326,192 @@ def _compute_forecast_accuracy(
 
 
 def _compute_reforecast(
-    fc_df: pd.DataFrame,
-    ac_df: pd.DataFrame,
+    merged_df: pd.DataFrame,
     config: Config,
-    as_of_mask: Optional[pd.Series],
     mode: str,
-) -> List[ReforecastResult]:
-    """Compute reforecast per (date, lob, channel).
+    completed_mask: pd.Series | None,
+) -> list[ReforecastResult]:
+    """Compute reforecast per (date, lob, channel) using completed actuals.
 
-    In as-of mode, only actuals up to the checkpoint influence the scale
-    factor.  Future actuals are ignored even if present in the input.
+    In as-of mode, only actuals from completed intervals influence the scale
+    factor.  Future actuals are ignored even if present in the input (key/time
+    based, never positional/modulo).  In retrospective mode there is no
+    checkpoint: the full-day total is used and no scaling of future intervals
+    is meaningful, so we return an empty list (nothing to reforecast).
     """
-    from wfm_intraday.calculator import calculate_reforecast as _calc
+    if mode == "retrospective":
+        return []
 
-    if mode == "as-of" and as_of_mask is not None:
-        # Mask actuals after checkpoint so reforecast only sees completed data
-        masked_ac = ac_df.copy()
-        # Only mask rows that have an actual_volume column
-        for col in ["actual_volume", "actual_aht_seconds"]:
-            if col in masked_ac.columns:
-                # Figure out which rows are completed by joining with as_of_mask
-                # Build a key-based lookup for masking
-                merged = fc_df.merge(masked_ac[["date", "lob", "interval_start", "channel"] + [col]],
-                                     on=["date", "lob", "interval_start", "channel"],
-                                     how="left", suffixes=("", "_right"))
-                # We handle this differently: use the as_of_mask approach
-                break
-        return _calc(fc_df, masked_ac, config, as_of_mask=as_of_mask)
-    return _calc(fc_df, ac_df, config)
+    if completed_mask is None:
+        return []
+
+    # Build a mask of usable actuals: completed AND actual volume present.
+    usable = completed_mask & merged_df["actual_volume"].notna()
+    df = merged_df.copy()
+    df["_usable"] = usable.to_numpy()
+
+    results: list[ReforecastResult] = []
+    for (date, lob, channel), group in df.groupby(["date", "lob", "channel"]):
+        group = group.sort_values("interval_start").reset_index(drop=True)
+
+        # Reject async/unknown channels defensively (should be unreachable).
+        ch = str(channel).strip().lower()
+        if ch not in SUPPORTED_CHANNELS:
+            raise ValueError(f"Unknown channel '{ch}'")
+
+        forecasts = group["forecast_volume"].to_numpy(dtype=float)
+        actuals_arr = group["actual_volume"].to_numpy(dtype=float)
+        usable = group["_usable"].to_numpy(dtype=bool)
+
+        # Completed actuals only (future actuals contribute exactly zero).
+        cum_actual = float(actuals_arr[usable].sum())
+        # Forecast over the same completed intervals for apples-to-apples.
+        cum_forecast = float(forecasts[usable].sum())
+
+        if cum_forecast <= 0:
+            continue
+
+        deviation_pct = (cum_actual - cum_forecast) / cum_forecast
+        scale = 1.0 + config.reforecast_blend_factor * deviation_pct
+
+        # Apply scale to FUTURE (non-completed) intervals only.
+        adjusted = list(forecasts)
+        for i in range(len(adjusted)):
+            if not usable[i]:
+                adjusted[i] = max(0.0, forecasts[i] * scale)
+
+        n_completed = int(usable.sum())
+        results.append(
+            ReforecastResult(
+                date=str(date),
+                lob=str(lob),
+                channel=ch,
+                checkpoint_interval=n_completed,
+                deviation_pct=deviation_pct,
+                scale_factor=scale,
+                blend_factor=config.reforecast_blend_factor,
+                original_forecast=list(forecasts),
+                adjusted_forecast=adjusted,
+            )
+        )
+
+    return results
+
+
+def _build_reforecast_lookup(
+    reforecast_results: list[ReforecastResult],
+) -> dict[tuple[str, str, str], list[float]]:
+    lookup: dict[tuple[str, str, str], list[float]] = {}
+    for rr in reforecast_results:
+        lookup[(rr.date, rr.lob, rr.channel)] = rr.adjusted_forecast
+    return lookup
+
+
+def _build_schedule_lookup(
+    schedule_df: pd.DataFrame | None,
+) -> dict[tuple[str, str, str, str], float]:
+    lookup: dict[tuple[str, str, str, str], float] = {}
+    if schedule_df is not None and not schedule_df.empty:
+        for _, row in schedule_df.iterrows():
+            key = (
+                str(row["date"]),
+                str(row["lob"]),
+                str(row["interval_start"]),
+                str(row["channel"]).strip().lower(),
+            )
+            lookup[key] = float(row["scheduled_fte"])
+    return lookup
 
 
 def _build_intervals(
     merged_df: pd.DataFrame,
     config: Config,
-    reforecast_results: List[ReforecastResult],
-    schedule_df: Optional[pd.DataFrame],
-    as_of_mask: Optional[pd.Series] = None,
-    mode: str = "retrospective",
-) -> List[IntervalRecord]:
-    """Build fully-populated interval records including all computed values."""
-    from wfm_intraday.calculator import (
-        _compute_staffing_req,
-        _channel_from_row,
-    )
+    reforecast_results: list[ReforecastResult],
+    schedule_df: pd.DataFrame | None,
+    completed_mask: pd.Series | None,
+    mode: str,
+) -> list[IntervalRecord]:
+    """Build fully-populated interval records (full forecast spine)."""
+    from wfm_intraday.calculator import _channel_from_row, _compute_staffing_req
 
     interval_seconds = config.interval_length_minutes * 60
+    reforecast_lookup = _build_reforecast_lookup(reforecast_results)
+    schedule_lookup = _build_schedule_lookup(schedule_df)
 
-    # Build reforecast lookup: (date, lob, channel) -> list of adjusted volumes
-    reforecast_lookup: Dict[str, List[float]] = {}
-    for rr in reforecast_results:
-        key = f"{rr.date}|{rr.lob}|{rr.channel}"
-        reforecast_lookup[key] = rr.adjusted_forecast
+    merged_df = merged_df.sort_values(["date", "lob", "channel", "interval_start"]).reset_index(
+        drop=True
+    )
 
-    # Build schedule lookup
-    schedule_lookup: Dict[str, float] = {}
-    if schedule_df is not None and not schedule_df.empty:
-        for _, row in schedule_df.iterrows():
-            key = f"{row['date']}|{row['lob']}|{row['interval_start']}|{row['channel']}"
-            schedule_lookup[key] = float(row["scheduled_fte"])
+    # Realign completed mask to the sorted frame (key/time based).
+    if completed_mask is not None:
+        completed_mask = completed_mask.reindex(merged_df.index)
 
-    # Sort by date, interval for ordered indexing into reforecast list
-    merged_df = merged_df.sort_values(["date", "lob", "channel", "interval_start"]).reset_index(drop=True)
+    intervals: list[IntervalRecord] = []
+    group_counts: dict[tuple[str, str, str], int] = {}
 
-    intervals: List[IntervalRecord] = []
-    group_counts: Dict[str, int] = {}
-
-    for _, row in merged_df.iterrows():
+    for i, row in merged_df.iterrows():
         date_val = str(row["date"])
         lob_val = str(row["lob"])
         ch = _channel_from_row(row, config)
         int_start = str(row["interval_start"])
 
-        group_key = f"{date_val}|{lob_val}|{ch}"
+        group_key = (date_val, lob_val, ch)
         idx = group_counts.get(group_key, 0)
         group_counts[group_key] = idx + 1
 
         forecast_vol = float(row["forecast_volume"])
         forecast_aht = float(row.get("forecast_aht_seconds", config.aht_seconds))
-        actual_vol_raw = row.get("actual_volume")
-        actual_aht_raw = row.get("actual_aht_seconds")
 
-        # Determine whether this interval is completed
+        raw_actual = row.get("actual_volume")
+        actual_vol: float | None
+        if pd.isna(raw_actual):
+            actual_vol = None
+        else:
+            actual_vol = float(raw_actual)
+
+        raw_aht = row.get("actual_aht_seconds")
+        actual_aht: float | None
+        if pd.isna(raw_aht):
+            actual_aht = None
+        else:
+            actual_aht = float(raw_aht)
+
+        # Completion status (key/time based; retrospective => all completed).
         is_completed = True
-        if mode == "as-of" and as_of_mask is not None:
-            is_completed = as_of_mask.iloc[idx] if idx < len(as_of_mask) else False
+        if mode == "as-of" and completed_mask is not None:
+            is_completed = bool(completed_mask.iloc[i])
 
-        # Actual values: None for unknown future intervals
-        actual_vol: Optional[float] = None
-        actual_aht: Optional[float] = None
-        if is_completed and actual_vol_raw is not None:
-            actual_vol = float(actual_vol_raw) if actual_vol_raw is not None else None
-        if is_completed and actual_aht_raw is not None:
-            actual_aht = float(actual_aht_raw) if actual_aht_raw is not None else None
+        # In as-of mode, future intervals have their actuals suppressed (None),
+        # independent of whether the input file happened to contain future rows.
+        if mode == "as-of" and not is_completed:
+            actual_vol = None
+            actual_aht = None
 
-        # Reforecast volume
-        reforecast_vol: Optional[float] = None
-        rf_key = f"{date_val}|{lob_val}|{ch}"
-        if rf_key in reforecast_lookup:
-            rf_list = reforecast_lookup[rf_key]
-            if idx < len(rf_list):
-                reforecast_vol = rf_list[idx]
+        # Reforecast volume for future intervals (as-of).
+        reforecast_vol: float | None = None
+        rf_list = reforecast_lookup.get(group_key)
+        if rf_list is not None and idx < len(rf_list):
+            reforecast_vol = rf_list[idx]
 
-        # Staffing requirements
+        # Staffing requirements.
         fc_req = _compute_staffing_req(forecast_vol, forecast_aht, interval_seconds, config, ch)
 
-        # Actual-based requirement: only for completed intervals
         act_req = None
-        if actual_vol is not None and actual_aht is not None and actual_vol > 0:
+        if actual_vol is not None and actual_aht is not None:
+            # Note: zero volume is a REAL zero -> zero requirement, kept as a
+            # populated requirement (not None).
             act_req = _compute_staffing_req(actual_vol, actual_aht, interval_seconds, config, ch)
 
-        # Reforecast-based requirement
         rf_req = None
-        if reforecast_vol is not None and reforecast_vol > 0:
-            rf_req = _compute_staffing_req(reforecast_vol, forecast_aht, interval_seconds, config, ch)
+        if not is_completed and reforecast_vol is not None:
+            rf_req = _compute_staffing_req(
+                reforecast_vol, forecast_aht, interval_seconds, config, ch
+            )
 
-        # Scheduled FTE
-        sch_key = f"{date_val}|{lob_val}|{int_start}|{ch}"
+        sch_key = (date_val, lob_val, int_start, ch)
         scheduled_fte = schedule_lookup.get(sch_key)
 
-        # Staffing gap: for completed intervals use actual, for future use reforecast
-        staffing_gap_fte: Optional[float] = None
+        staffing_gap_fte: float | None = None
         if scheduled_fte is not None:
             if is_completed and act_req is not None:
                 staffing_gap_fte = act_req.gross_fte - scheduled_fte
@@ -423,25 +520,27 @@ def _build_intervals(
             elif act_req is not None:
                 staffing_gap_fte = act_req.gross_fte - scheduled_fte
 
-        intervals.append(IntervalRecord(
-            date=date_val,
-            interval_start=int_start,
-            lob=lob_val,
-            channel=ch,
-            forecast_volume=forecast_vol,
-            forecast_aht_seconds=forecast_aht,
-            actual_volume=actual_vol,
-            actual_aht_seconds=actual_aht,
-            reforecast_volume=reforecast_vol,
-            forecast_required_net_fte=fc_req.net_fte,
-            forecast_required_gross_fte=fc_req.gross_fte,
-            actual_required_net_fte=act_req.net_fte if act_req else None,
-            actual_required_gross_fte=act_req.gross_fte if act_req else None,
-            reforecast_required_net_fte=rf_req.net_fte if rf_req else None,
-            reforecast_required_gross_fte=rf_req.gross_fte if rf_req else None,
-            scheduled_fte=scheduled_fte,
-            staffing_gap_fte=staffing_gap_fte,
-        ))
+        intervals.append(
+            IntervalRecord(
+                date=date_val,
+                interval_start=int_start,
+                lob=lob_val,
+                channel=ch,
+                forecast_volume=forecast_vol,
+                forecast_aht_seconds=forecast_aht,
+                actual_volume=actual_vol,
+                actual_aht_seconds=actual_aht,
+                reforecast_volume=reforecast_vol,
+                forecast_required_net_fte=fc_req.net_fte,
+                forecast_required_gross_fte=fc_req.gross_fte,
+                actual_required_net_fte=act_req.net_fte if act_req else None,
+                actual_required_gross_fte=act_req.gross_fte if act_req else None,
+                reforecast_required_net_fte=rf_req.net_fte if rf_req else None,
+                reforecast_required_gross_fte=rf_req.gross_fte if rf_req else None,
+                scheduled_fte=scheduled_fte,
+                staffing_gap_fte=staffing_gap_fte,
+            )
+        )
 
     return intervals
 
@@ -449,113 +548,113 @@ def _build_intervals(
 def _compute_staffing_gaps(
     merged_df: pd.DataFrame,
     config: Config,
-    reforecast_results: List[ReforecastResult],
-    schedule_df: Optional[pd.DataFrame],
-    as_of_mask: Optional[pd.Series] = None,
-    mode: str = "retrospective",
-) -> List[StaffingGap]:
-    """Compute StaffingGap objects with proper future-interval handling."""
-    from wfm_intraday.calculator import (
-        _compute_staffing_req,
-        _channel_from_row,
-    )
+    reforecast_results: list[ReforecastResult],
+    schedule_df: pd.DataFrame | None,
+    completed_mask: pd.Series | None,
+    mode: str,
+) -> list[StaffingGap]:
+    """Compute StaffingGap objects with proper future-interval handling.
+
+    Zero scheduled FTE is a REAL scheduled zero (status computed against the
+    gap), NOT "no_schedule".  "no_schedule" is reserved for intervals with no
+    schedule row at all.
+    """
+    from wfm_intraday.calculator import _channel_from_row, _compute_staffing_req
 
     interval_seconds = config.interval_length_minutes * 60
+    schedule_lookup = _build_schedule_lookup(schedule_df)
+    reforecast_lookup = _build_reforecast_lookup(reforecast_results)
 
-    # Build schedule lookup
-    schedule_lookup: Dict[str, float] = {}
-    if schedule_df is not None and not schedule_df.empty:
-        for _, row in schedule_df.iterrows():
-            key = f"{row['date']}|{row['lob']}|{row['interval_start']}|{row['channel']}"
-            schedule_lookup[key] = float(row["scheduled_fte"])
+    merged_df = merged_df.sort_values(["date", "lob", "channel", "interval_start"]).reset_index(
+        drop=True
+    )
 
-    # Build reforecast lookup
-    reforecast_lookup: Dict[str, List[float]] = {}
-    for rr in reforecast_results:
-        key = f"{rr.date}|{rr.lob}|{rr.channel}"
-        reforecast_lookup[key] = rr.adjusted_forecast
+    if completed_mask is not None:
+        completed_mask = completed_mask.reindex(merged_df.index)
 
-    merged_df = merged_df.sort_values(["date", "lob", "channel", "interval_start"]).reset_index(drop=True)
-    gaps: List[StaffingGap] = []
-    group_counts: Dict[str, int] = {}
+    gaps: list[StaffingGap] = []
+    group_counts: dict[tuple[str, str, str], int] = {}
 
-    for _, row in merged_df.iterrows():
+    for i, row in merged_df.iterrows():
         date_val = str(row["date"])
         lob_val = str(row["lob"])
         ch = _channel_from_row(row, config)
         int_start = str(row["interval_start"])
 
-        group_key = f"{date_val}|{lob_val}|{ch}"
+        group_key = (date_val, lob_val, ch)
         idx = group_counts.get(group_key, 0)
         group_counts[group_key] = idx + 1
 
         forecast_vol = float(row["forecast_volume"])
         forecast_aht = float(row.get("forecast_aht_seconds", config.aht_seconds))
-        actual_vol = float(row.get("actual_volume", 0))
-        actual_aht = float(row.get("actual_aht_seconds", config.aht_seconds))
+
+        raw_actual = row.get("actual_volume")
+        actual_vol = None if pd.isna(raw_actual) else float(raw_actual)
+        raw_aht = row.get("actual_aht_seconds")
+        actual_aht = None if pd.isna(raw_aht) else float(raw_aht)
 
         is_completed = True
-        if mode == "as-of" and as_of_mask is not None:
-            is_completed = as_of_mask.iloc[idx] if idx < len(as_of_mask) else True
+        if mode == "as-of" and completed_mask is not None:
+            is_completed = bool(completed_mask.iloc[i])
+
+        if mode == "as-of" and not is_completed:
+            actual_vol = None
+            actual_aht = None
 
         fc_req = _compute_staffing_req(forecast_vol, forecast_aht, interval_seconds, config, ch)
-        act_req = _compute_staffing_req(actual_vol, actual_aht, interval_seconds, config, ch)
 
-        # Reforecast-based requirement for future intervals
-        rf_net: Optional[float] = None
-        rf_gross: Optional[float] = None
-        if not is_completed:
-            rf_key = f"{date_val}|{lob_val}|{ch}"
-            if rf_key in reforecast_lookup:
-                rf_list = reforecast_lookup[rf_key]
-                if idx < len(rf_list) and rf_list[idx] > 0:
-                    rf_req = _compute_staffing_req(
-                        rf_list[idx], forecast_aht, interval_seconds, config, ch
-                    )
-                    rf_net = rf_req.net_fte
-                    rf_gross = rf_req.gross_fte
+        act_req = None
+        if actual_vol is not None and actual_aht is not None:
+            act_req = _compute_staffing_req(actual_vol, actual_aht, interval_seconds, config, ch)
 
-        sch_key = f"{date_val}|{lob_val}|{int_start}|{ch}"
+        rf_req = None
+        rf_list = reforecast_lookup.get(group_key)
+        if not is_completed and rf_list is not None and idx < len(rf_list):
+            rf_req = _compute_staffing_req(rf_list[idx], forecast_aht, interval_seconds, config, ch)
+
+        sch_key = (date_val, lob_val, int_start, ch)
         scheduled_fte = schedule_lookup.get(sch_key)
 
-        # Gap: use reforecast requirement for future intervals
-        gap_fte: Optional[float] = None
+        gap_fte: float | None = None
         status = "no_schedule"
 
         if scheduled_fte is not None:
-            # Choose the appropriate requirement for gap calculation
-            if not is_completed and rf_gross is not None:
-                required_for_gap = rf_gross
+            # Choose the appropriate requirement.
+            if is_completed and act_req is not None:
+                required_gross = act_req.gross_fte
+            elif not is_completed and rf_req is not None:
+                required_gross = rf_req.gross_fte
+            elif act_req is not None:
+                required_gross = act_req.gross_fte
             else:
-                required_for_gap = act_req.gross_fte
+                required_gross = fc_req.gross_fte
 
-            gap_fte = required_for_gap - scheduled_fte
+            gap_fte = required_gross - scheduled_fte
 
-            if scheduled_fte <= 0:
-                status = "no_schedule"
-            elif gap_fte > config.understaff_threshold_pct * scheduled_fte:
+            # Zero scheduled FTE is a real zero -> must NOT be "no_schedule".
+            if gap_fte > config.understaff_threshold_pct * max(scheduled_fte, 1e-9):
                 status = "understaffed"
-            elif abs(gap_fte) < config.understaff_threshold_pct * scheduled_fte * 0.5:
-                status = "balanced"
-            elif gap_fte < -config.overstaff_threshold_pct * scheduled_fte:
+            elif gap_fte < -config.overstaff_threshold_pct * max(scheduled_fte, 1e-9):
                 status = "overstaffed"
             else:
                 status = "balanced"
 
-        gaps.append(StaffingGap(
-            date=date_val,
-            interval_start=int_start,
-            lob=lob_val,
-            channel=ch,
-            forecast_required_net_fte=fc_req.net_fte,
-            forecast_required_gross_fte=fc_req.gross_fte,
-            actual_required_net_fte=act_req.net_fte,
-            actual_required_gross_fte=act_req.gross_fte,
-            reforecast_required_net_fte=rf_net,
-            reforecast_required_gross_fte=rf_gross,
-            scheduled_fte=scheduled_fte,
-            gap_fte=gap_fte,
-            status=status,
-        ))
+        gaps.append(
+            StaffingGap(
+                date=date_val,
+                interval_start=int_start,
+                lob=lob_val,
+                channel=ch,
+                forecast_required_net_fte=fc_req.net_fte,
+                forecast_required_gross_fte=fc_req.gross_fte,
+                actual_required_net_fte=act_req.net_fte if act_req else None,
+                actual_required_gross_fte=act_req.gross_fte if act_req else None,
+                reforecast_required_net_fte=rf_req.net_fte if rf_req else None,
+                reforecast_required_gross_fte=rf_req.gross_fte if rf_req else None,
+                scheduled_fte=scheduled_fte,
+                gap_fte=gap_fte,
+                status=status,
+            )
+        )
 
     return gaps

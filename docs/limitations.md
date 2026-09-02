@@ -32,11 +32,10 @@ engine.
 The reforecast uses a simple cumulative‑deviation scaler.  It does not
 learn intra‑day arrival patterns or apply advanced time‑series models.
 
-## Async model experimental
+## Async not supported
 
-The async/back‑office model in v0.2 treats interval volume as daily
-volume, which is incorrect for interval‑level analysis.  Voice and chat
-models are preferred.  Async support is planned for a future release.
+Async/back-office staffing is not supported in version 0.2.  Any input row
+with `channel=async` is rejected.  Voice and chat are the supported channels.
 
 ## No DST or timezone handling
 

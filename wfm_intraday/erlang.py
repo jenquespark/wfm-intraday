@@ -2,16 +2,16 @@
 
 voice / Erlang C  — queueing model with service-level constraint.
 chat              — concurrency-aware throughput model.
-async / back-office — workload/capacity model (EXPERIMENTAL in v0.2).
 
 All implementations depend only on the Python standard library (``math``).
+
+Async/back-office staffing is NOT supported in v0.2.1 and has no model here.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,7 @@ def _erlang_b(offered_load: float, positions: int) -> float:
     B(E, n) = E · B(E, n−1) / (E · B(E, n−1) + n)
     """
     if offered_load < 0 or positions < 0:
-        raise ValueError(
-            f"offered_load ({offered_load}) and positions ({positions}) must be >= 0"
-        )
+        raise ValueError(f"offered_load ({offered_load}) and positions ({positions}) must be >= 0")
     if positions == 0:
         return 1.0
     if offered_load == 0:
@@ -94,11 +92,11 @@ def required_positions(
     sl_threshold_seconds: float = 20.0,
     max_occupancy: float = 0.85,
     max_search: int = 300,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Find minimum agents needed to meet a service-level target (voice/Erlang C).
 
     Returns:
-        Dict with ``required_positions``, ``occupancy``,
+        dict with ``required_positions``, ``occupancy``,
         ``service_level_achieved``, ``constrained_by_occupancy``.
     """
     if calls_per_interval <= 0 or aht_seconds <= 0:
@@ -110,7 +108,7 @@ def required_positions(
         }
 
     offered_load = (calls_per_interval * aht_seconds) / interval_seconds
-    min_n = max(1, int(math.floor(offered_load + 1)))
+    min_n = max(1, math.floor(offered_load + 1))
     max_n = min_n + max_search
 
     best_n = min_n
@@ -142,9 +140,7 @@ def required_positions(
         "required_positions": float(best_n),
         "occupancy": float(achieved_occupancy),
         "service_level_achieved": float(max(0.0, min(1.0, best_sl))),
-        "constrained_by_occupancy": bool(
-            constrained or achieved_occupancy > max_occupancy
-        ),
+        "constrained_by_occupancy": bool(constrained or achieved_occupancy > max_occupancy),
     }
 
 
@@ -159,7 +155,7 @@ def chat_required_positions(
     interval_seconds: float,
     concurrency: int = 3,
     occupancy_target: float = 0.85,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Estimate chat staffing using a concurrency model.
 
     One agent handles multiple chats simultaneously.  The model:
@@ -180,56 +176,8 @@ def chat_required_positions(
 
     raw_load = (chats_per_interval * aht_seconds) / interval_seconds
     effective_load = raw_load / concurrency
-    required = (
-        math.ceil(effective_load / occupancy_target) if effective_load > 0 else 0
-    )
+    required = math.ceil(effective_load / occupancy_target) if effective_load > 0 else 0
     occupancy = effective_load / required if required > 0 else 0.0
-
-    return {
-        "required_positions": float(required),
-        "occupancy": float(occupancy),
-    }
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# Async / back-office  (EXPERIMENTAL — disabled by default in v0.2)
-# ════════════════════════════════════════════════════════════════════════════
-
-
-def async_required_positions(
-    items_per_interval: float,
-    aht_seconds: float,
-    service_hours_per_day: float,
-    sla_business_days: float,  # reserved for future use
-) -> Dict[str, float]:
-    """Estimate back-office staffing using a workload model.
-
-    **EXPERIMENTAL in v0.2.**  The current implementation treats
-    *items_per_interval* as a daily volume and applies a simple staffing
-    ratio.  This is NOT correct for interval-level WFM analysis where each
-    interval represents 15–30 minutes of data.
-
-    The function is kept for backward compatibility but callers should
-    prefer voice or chat models.  Async channel support is planned for a
-    future release.
-
-    If you need to use this function, understand the limitation: it divides
-    *items_per_interval* by daily capacity, which conflates interval-level
-    and daily-level concepts.  For correct interval-level staffing, multiply
-    the item count to reflect the full day first.
-    """
-    if items_per_interval <= 0 or aht_seconds <= 0:
-        return {"required_positions": 0.0, "occupancy": 0.0}
-
-    # WARNING: items_per_interval is treated as daily volume — this is
-    # incorrect for interval-level analysis.  See docstring above.
-    daily_volume = items_per_interval
-    daily_capacity = service_hours_per_day * 3600.0
-    required = math.ceil(daily_volume * aht_seconds / daily_capacity)
-    occupancy = (
-        (daily_volume * aht_seconds) / (required * daily_capacity)
-        if required > 0 else 0.0
-    )
 
     return {
         "required_positions": float(required),

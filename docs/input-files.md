@@ -9,7 +9,7 @@ Required columns:
 | `date` | string | YYYY-MM-DD | Operating date |
 | `lob` | string | — | Line of business (queue, skill group) |
 | `interval_start` | string | HH:MM | Interval start time |
-| `channel` | string | voice/chat/async | Contact channel |
+| `channel` | string | voice/chat | Contact channel |
 | `forecast_volume` | float | count | Forecast contact volume |
 | `forecast_aht_seconds` | float | seconds | Forecast average handle time |
 
@@ -20,7 +20,7 @@ Required columns:
 | `date` | string | YYYY-MM-DD | Operating date |
 | `lob` | string | — | Line of business |
 | `interval_start` | string | HH:MM | Interval start time |
-| `channel` | string | voice/chat/async | Contact channel |
+| `channel` | string | voice/chat | Contact channel |
 | `actual_volume` | float | count | Actual contact volume |
 | `actual_aht_seconds` | float | seconds | Actual average handle time |
 
@@ -31,7 +31,7 @@ Required columns:
 | `date` | string | YYYY-MM-DD | Operating date |
 | `lob` | string | — | Line of business |
 | `interval_start` | string | HH:MM | Interval start time |
-| `channel` | string | voice/chat/async | Contact channel |
+| `channel` | string | voice/chat | Contact channel |
 | `scheduled_fte` | float | FTE | Staffing planned for the interval |
 
 Schedule data is optional.  When absent, staffing‑gap analysis is
@@ -40,7 +40,7 @@ unavailable and intervals are marked `no_schedule`.
 ## Key uniqueness
 
 The combination `(date, lob, interval_start, channel)` must be unique
-within each file.  Duplicates produce validation warnings.
+within each file.  Duplicates are hard errors (analysis fails).
 
 ## Column mapping
 
@@ -62,5 +62,5 @@ This maps canonical field names (keys) to source column names (values).
 ## Validation rules
 
 * Negative volume, AHT, or FTE values are rejected.
-* Channel must be `voice`, `chat`, or `async`.
+* Channel must be `voice` or `chat`.
 * Missing required columns produce a clear error.

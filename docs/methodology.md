@@ -40,11 +40,10 @@ This is intentionally simpler than Erlang C because agents handle
 multiple chat sessions in parallel.  It is suitable for capacity
 estimation, not chat‑specific SLA guarantees.
 
-## Async staffing (experimental)
+## Async staffing
 
-Back‑office work uses a workload‑based staffing ratio.  In v0.2 this
-model has a known limitation: it treats interval volume as daily volume.
-See `docs/limitations.md`.
+Async/back-office staffing is not supported in version 0.2.  See
+`docs/limitations.md`.
 
 ## Reforecast
 

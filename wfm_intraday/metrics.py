@@ -8,7 +8,6 @@ are excluded from MAPE and the overall WAPE denominator is guarded.
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -35,15 +34,15 @@ def calculate_wape(actuals: np.ndarray, forecasts: np.ndarray) -> float:
     if len(actuals) == 0:
         raise ValueError("Cannot calculate WAPE: empty arrays")
     if len(actuals) != len(forecasts):
-        raise ValueError(
-            f"Length mismatch: actuals={len(actuals)} forecasts={len(forecasts)}"
-        )
+        raise ValueError(f"Length mismatch: actuals={len(actuals)} forecasts={len(forecasts)}")
 
     total_actual = float(np.sum(actuals))
     if total_actual <= 0:
         return 0.0
 
-    abs_error = float(np.sum(np.abs(np.asarray(actuals, dtype=float) - np.asarray(forecasts, dtype=float))))
+    abs_error = float(
+        np.sum(np.abs(np.asarray(actuals, dtype=float) - np.asarray(forecasts, dtype=float)))
+    )
     return (abs_error / total_actual) * 100.0
 
 
@@ -119,7 +118,7 @@ def calculate_per_lob(
     df: pd.DataFrame,
     actual_col: str = "actual_volume",
     forecast_col: str = "forecast_volume",
-) -> Dict[str, AccuracyMetrics]:
+) -> dict[str, AccuracyMetrics]:
     """Calculate accuracy metrics per LOB.
 
     Args:
@@ -128,12 +127,12 @@ def calculate_per_lob(
         forecast_col: Name of the forecast-volume column.
 
     Returns:
-        Dict mapping LOB names to ``AccuracyMetrics``.
+        dict mapping LOB names to ``AccuracyMetrics``.
     """
     if df.empty:
         return {}
 
-    results: Dict[str, AccuracyMetrics] = {}
+    results: dict[str, AccuracyMetrics] = {}
     for lob_name, group in df.groupby("lob"):
         actuals = group[actual_col].to_numpy(dtype=float)
         forecasts = group[forecast_col].to_numpy(dtype=float)

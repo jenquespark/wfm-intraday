@@ -1,6 +1,6 @@
 # WFM Intraday configuration
 # -------------------------
-# All values have sensible defaults.  See reforecast/config.py for field docs.
+# All values have sensible defaults.  See wfm_intraday/config.py for field docs.
 
 # Interval length (minutes)
 interval_length_minutes: 30
@@ -8,7 +8,7 @@ interval_length_minutes: 30
 # Average handle time (seconds) — fallback when per-row value is missing
 aht_seconds: 270
 
-# Shrinkage fraction [0, 1).  Used to convert net → gross FTE:
+# Shrinkage fraction [0, 1).  Used to convert net -> gross FTE:
 #   gross_fte = net_fte / (1 - shrinkage_pct)
 shrinkage_pct: 0.34
 
@@ -21,23 +21,18 @@ max_occupancy: 0.85
 chat_concurrency: 3
 chat_sl_threshold_seconds: 60
 
-# Async / back-office settings
-async_service_hours_per_day: 8.0
-async_sla_business_days: 1.0
-
 # Gap classification thresholds
-understaff_threshold_pct: 0.10   # gap > 10 % of scheduled → understaffed
-overstaff_threshold_pct: 0.15    # gap < -15 % of scheduled → overstaffed
+understaff_threshold_pct: 0.10   # gap > 10 % of scheduled -> understaffed
+overstaff_threshold_pct: 0.15    # gap < -15 % of scheduled -> overstaffed
 
 # Reforecast settings
-reforecast_checkpoint_interval: 10   # interval index where scaling starts
-reforecast_blend_factor: 0.50        # how much deviation persists (0–1)
+reforecast_blend_factor: 0.50        # how much deviation persists (0-1)
 
 # Redistribution constraints
 max_movement_window_intervals: 4   # max intervals apart for a move
 max_movement_window_minutes: 120   # max minutes apart for a move
 
-# Default channel (voice / chat / async)
+# Default channel (voice / chat)
 channel: voice
 
 # Per-channel configuration overrides (optional)
@@ -47,6 +42,3 @@ channel: voice
 #   chat:
 #     channel_type: chat
 #     concurrency: 3
-#   email:
-#     channel_type: async
-#     service_hours_per_day: 8.0

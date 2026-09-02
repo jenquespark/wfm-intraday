@@ -1,20 +1,20 @@
-"""Legacy import shim — all models now live in ``reforecast.domain.models``.
+"""Convenience re-export of the canonical domain models.
 
-This file is kept so existing imports from ``reforecast.models`` continue to
-work.  New code should import from ``reforecast.domain.models`` directly.
+All models live in ``wfm_intraday.domain.models``.  This module re-exports
+them so callers can import from ``wfm_intraday.models`` if preferred.
 """
 
-from wfm_intraday.domain.models import (  # noqa: F401
-    AccuracyMetrics,
+from wfm_intraday.domain.models import (
     ACTUALS_COLUMNS,
-    AnalysisResult,
     BASE_KEY_COLUMNS,
     FORECAST_COLUMNS,
+    SCHEDULE_COLUMNS,
+    AccuracyMetrics,
+    AnalysisResult,
     IntervalRecord,
     ReconciliationReport,
     RedistributionRecommendation,
     ReforecastResult,
-    SCHEDULE_COLUMNS,
     StaffingGap,
     StaffingRequirement,
     validate_columns,

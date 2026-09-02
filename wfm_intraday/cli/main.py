@@ -15,11 +15,11 @@ import argparse
 import logging
 import os
 import sys
-from typing import List, Optional
+from typing import Optional
 
 from wfm_intraday import __version__
 from wfm_intraday.domain.models import AnalysisResult
-from wfm_intraday.validation.inputs import validate_input_files, reconcile_keys
+from wfm_intraday.validation.inputs import reconcile_keys, validate_input_files
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -36,8 +36,11 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--forecast", required=True, help="Forecast CSV path")
     parser.add_argument("--actual", required=True, dest="actuals", help="Actuals CSV path")
     parser.add_argument("--staffing", default=None, help="Schedule/staffing CSV path (optional)")
-    parser.add_argument("--config", default=None,
-                        help="Config YAML path (default: config.yaml in cwd, or built-in defaults)")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Config YAML path (default: config.yaml in cwd, or built-in defaults)",
+    )
     parser.add_argument("--lob", default=None, help="Filter to one LOB")
 
 
@@ -60,8 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--output-dir", default="output", help="Output directory (default: output/)")
     ap.add_argument("--date", default=None, help="Analysis date (YYYY-MM-DD)")
     ap.add_argument("--checkpoint", default=None, help="Checkpoint time (HH:MM)")
-    ap.add_argument("--mode", default="retrospective", choices=["retrospective", "as-of"],
-                    help="retrospective (all data) or as-of (checkpoint-aware)")
+    ap.add_argument(
+        "--mode",
+        default="retrospective",
+        choices=["retrospective", "as-of"],
+        help="retrospective (all data) or as-of (checkpoint-aware)",
+    )
 
     # sample
     sub.add_parser("sample", help="Generate sample data in ./data/")
@@ -73,16 +80,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    """Validate input files and print reconciliation report."""
+    """Validate input files and print reconciliation report.
+
+    Duplicate keys and key mismatches HARD-FAIL with exit code 2.
+    """
+    from wfm_intraday.validation.inputs import require_no_mismatch
+
     try:
         fc_df, ac_df, sd_df, warns = validate_input_files(
             args.forecast, args.actuals, args.staffing
         )
-    except (FileNotFoundError, ValueError) as e:
+        report = reconcile_keys(fc_df, ac_df, sd_df)
+        require_no_mismatch(report)
+    except FileNotFoundError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return EXIT_INPUT_ERROR
-
-    report = reconcile_keys(fc_df, ac_df, sd_df)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return EXIT_INPUT_ERROR
 
     print("=== INPUT VALIDATION ===")
     print(f"  Forecast: {report.forecast_rows} rows")
@@ -92,16 +107,10 @@ def cmd_validate(args: argparse.Namespace) -> int:
     else:
         print("  Staffing: not provided")
     print(f"  Matched keys: {report.matched_keys}")
-    if report.has_mismatch:
-        print("  WARNINGS:")
-        if report.forecast_only:
-            print(f"    Forecast-only keys: {len(report.forecast_only)}")
-        if report.actual_only:
-            print(f"    Actual-only keys:   {len(report.actual_only)}")
     if warns:
         for w in warns:
             print(f"  WARNING: {w}")
-    print("  Validation: OK" if not report.has_mismatch else "  Validation: PASSED WITH WARNINGS")
+    print("  Validation: OK")
     return EXIT_SUCCESS
 
 
@@ -143,7 +152,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     except (FileNotFoundError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return EXIT_INPUT_ERROR
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — top-level CLI boundary maps any error to exit 3
         print(f"CALCULATION ERROR: {e}", file=sys.stderr)
         return EXIT_CALC_ERROR
 
@@ -154,30 +163,33 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
     try:
         from wfm_intraday.reporting.excel import write_excel_report
+
         excel_path = os.path.join(output_dir, "intraday_report.xlsx")
         write_excel_report(excel_path, result)
         print(f"Excel: {excel_path}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — reporter failure must be reported, not crash
         print(f"ERROR: Excel write failed: {e}", file=sys.stderr)
         output_errors += 1
 
     try:
         from wfm_intraday.reporting.json import write_analysis_json
+
         json_path = os.path.join(output_dir, "analysis.json")
         write_analysis_json(json_path, result)
         print(f"JSON:  {json_path}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — reporter failure must be reported, not crash
         print(f"ERROR: JSON write failed: {e}", file=sys.stderr)
         output_errors += 1
 
     try:
         from wfm_intraday.reporting.csv import write_interval_csv, write_redistribution_csv
+
         csv_path = os.path.join(output_dir, "interval_analysis.csv")
         write_interval_csv(csv_path, result)
         if result.redistribution:
             redist_path = os.path.join(output_dir, "redistribution_plan.csv")
             write_redistribution_csv(redist_path, result)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — reporter failure must be reported, not crash
         print(f"ERROR: CSV write failed: {e}", file=sys.stderr)
         output_errors += 1
 
@@ -236,6 +248,7 @@ def _print_summary(result: AnalysisResult) -> None:
 def cmd_sample(args: argparse.Namespace) -> int:
     """Generate sample data."""
     from wfm_intraday import generate_sample_data
+
     generate_sample_data("data")
     print("Sample data generated in data/")
     return EXIT_SUCCESS
@@ -244,23 +257,24 @@ def cmd_sample(args: argparse.Namespace) -> int:
 def cmd_web(args: argparse.Namespace) -> int:
     """Launch the local web interface."""
     try:
-        import streamlit  # noqa: F401
+        import streamlit
     except ImportError:
         print(
             "Web interface dependencies are not installed.\n"
             "Install with:\n\n"
-            "    pip install -e \".[web]\"\n",
+            '    pip install -e ".[web]"\n',
             file=sys.stderr,
         )
         return EXIT_INPUT_ERROR
 
     import subprocess
+
     web_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "app.py")
-    subprocess.run([sys.executable, "-m", "streamlit", "run", web_path])
+    subprocess.run([sys.executable, "-m", "streamlit", "run", web_path], check=False)
     return EXIT_SUCCESS
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict
+from typing import Any
 
 import pandas as pd
 
@@ -37,7 +37,7 @@ def write_excel_report(path: str, result: AnalysisResult) -> str:
 
 def _write_summary(writer: Any, result: AnalysisResult) -> None:
     fa = result.forecast_accuracy
-    row: Dict[str, Any] = {}
+    row: dict[str, Any] = {}
     if "overall" in fa:
         o = fa["overall"]
         row["WAPE (%)"] = o["wape"]
@@ -63,25 +63,27 @@ def _write_intervals(writer: Any, result: AnalysisResult) -> None:
         return
     rows = []
     for iv in result.intervals:
-        rows.append({
-            "Date": iv.date,
-            "Interval": iv.interval_start,
-            "LOB": iv.lob,
-            "Channel": iv.channel,
-            "Forecast Volume": iv.forecast_volume,
-            "Forecast AHT (s)": iv.forecast_aht_seconds,
-            "Actual Volume": iv.actual_volume or "",
-            "Actual AHT (s)": iv.actual_aht_seconds or "",
-            "Reforecast Volume": iv.reforecast_volume or "",
-            "Forecast Req Net FTE": iv.forecast_required_net_fte or "",
-            "Forecast Req Gross FTE": iv.forecast_required_gross_fte or "",
-            "Actual Req Net FTE": iv.actual_required_net_fte or "",
-            "Actual Req Gross FTE": iv.actual_required_gross_fte or "",
-            "Reforecast Req Net FTE": iv.reforecast_required_net_fte or "",
-            "Reforecast Req Gross FTE": iv.reforecast_required_gross_fte or "",
-            "Scheduled FTE": iv.scheduled_fte or "",
-            "Staffing Gap FTE": iv.staffing_gap_fte or "",
-        })
+        rows.append(
+            {
+                "Date": iv.date,
+                "Interval": iv.interval_start,
+                "LOB": iv.lob,
+                "Channel": iv.channel,
+                "Forecast Volume": iv.forecast_volume,
+                "Forecast AHT (s)": iv.forecast_aht_seconds,
+                "Actual Volume": iv.actual_volume or "",
+                "Actual AHT (s)": iv.actual_aht_seconds or "",
+                "Reforecast Volume": iv.reforecast_volume or "",
+                "Forecast Req Net FTE": iv.forecast_required_net_fte or "",
+                "Forecast Req Gross FTE": iv.forecast_required_gross_fte or "",
+                "Actual Req Net FTE": iv.actual_required_net_fte or "",
+                "Actual Req Gross FTE": iv.actual_required_gross_fte or "",
+                "Reforecast Req Net FTE": iv.reforecast_required_net_fte or "",
+                "Reforecast Req Gross FTE": iv.reforecast_required_gross_fte or "",
+                "Scheduled FTE": iv.scheduled_fte or "",
+                "Staffing Gap FTE": iv.staffing_gap_fte or "",
+            }
+        )
     pd.DataFrame(rows).to_excel(writer, sheet_name="Interval_Analysis", index=False)
 
 
@@ -92,7 +94,9 @@ def _write_accuracy(writer: Any, result: AnalysisResult) -> None:
         rows.append({"LOB": lob, "WAPE (%)": m["wape"], "MAPE (%)": m["mape"], "Bias": m["bias"]})
     if "overall" in fa:
         o = fa["overall"]
-        rows.append({"LOB": "OVERALL", "WAPE (%)": o["wape"], "MAPE (%)": o["mape"], "Bias": o["bias"]})
+        rows.append(
+            {"LOB": "OVERALL", "WAPE (%)": o["wape"], "MAPE (%)": o["mape"], "Bias": o["bias"]}
+        )
     if rows:
         pd.DataFrame(rows).to_excel(writer, sheet_name="Forecast_Accuracy", index=False)
 
@@ -102,21 +106,23 @@ def _write_gaps(writer: Any, result: AnalysisResult) -> None:
         return
     rows = []
     for g in result.staffing_gaps[:2000]:
-        rows.append({
-            "Date": g.date,
-            "Interval": g.interval_start,
-            "LOB": g.lob,
-            "Channel": g.channel,
-            "Forecast Required Net FTE": g.forecast_required_net_fte or "",
-            "Forecast Required Gross FTE": g.forecast_required_gross_fte or "",
-            "Actual Required Net FTE": g.actual_required_net_fte or "",
-            "Actual Required Gross FTE": g.actual_required_gross_fte or "",
-            "Reforecast Required Net FTE": g.reforecast_required_net_fte or "",
-            "Reforecast Required Gross FTE": g.reforecast_required_gross_fte or "",
-            "Scheduled FTE": g.scheduled_fte or "N/A",
-            "Gap FTE": g.gap_fte or "N/A",
-            "Status": g.status,
-        })
+        rows.append(
+            {
+                "Date": g.date,
+                "Interval": g.interval_start,
+                "LOB": g.lob,
+                "Channel": g.channel,
+                "Forecast Required Net FTE": g.forecast_required_net_fte or "",
+                "Forecast Required Gross FTE": g.forecast_required_gross_fte or "",
+                "Actual Required Net FTE": g.actual_required_net_fte or "",
+                "Actual Required Gross FTE": g.actual_required_gross_fte or "",
+                "Reforecast Required Net FTE": g.reforecast_required_net_fte or "",
+                "Reforecast Required Gross FTE": g.reforecast_required_gross_fte or "",
+                "Scheduled FTE": g.scheduled_fte or "N/A",
+                "Gap FTE": g.gap_fte or "N/A",
+                "Status": g.status,
+            }
+        )
     pd.DataFrame(rows).to_excel(writer, sheet_name="Staffing_Gaps", index=False)
 
 

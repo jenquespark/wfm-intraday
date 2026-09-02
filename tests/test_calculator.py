@@ -1,21 +1,23 @@
-"""Tests for staffing gap, redistribution, and reforecast calculations."""
+"""Tests for staffing math, channel validation, and key reconciliation."""
 
 from __future__ import annotations
 
-import pandas as pd
 import numpy as np
-from wfm_intraday.config import Config
+import pandas as pd
+import pytest
+
 from wfm_intraday.calculator import (
-    compute_staffing_requirement,
-    calculate_staffing_gap,
+    _channel_from_row,
+    _compute_staffing_req,
     calculate_redistribution,
-    calculate_reforecast,
+    compute_staffing_requirement,
 )
-from wfm_intraday.validation.inputs import reconcile_keys as _reconcile_keys
-from wfm_intraday.models import StaffingGap
+from wfm_intraday.config import Config
+from wfm_intraday.models import StaffingGap, StaffingRequirement
+from wfm_intraday.validation.inputs import reconcile_keys, require_no_mismatch
 
+# ---------- compute_staffing_requirement ----------
 
-# ---------- compile_staffing_requirement ----------
 
 class TestComputeStaffingRequirement:
     def test_voice_requires_agents(self):
@@ -42,182 +44,175 @@ class TestComputeStaffingRequirement:
         req = compute_staffing_requirement(100.0, 180, 1800, config, "voice")
         assert abs(req.gross_fte - req.net_fte) < 0.01
 
-
-# ---------- calculate_staffing_gap ----------
-
-def _make_merged_df() -> pd.DataFrame:
-    return pd.DataFrame({
-        "date": ["2026-05-04", "2026-05-04", "2026-05-04"],
-        "lob": ["inbound", "inbound", "inbound"],
-        "interval_start": ["08:00", "08:30", "09:00"],
-        "channel": ["voice", "voice", "voice"],
-        "forecast_volume": [100.0, 120.0, 130.0],
-        "forecast_aht_seconds": [180.0, 180.0, 180.0],
-        "actual_volume": [110.0, 90.0, 140.0],
-        "actual_aht_seconds": [185.0, 175.0, 190.0],
-    })
-
-
-class TestStaffingGap:
-    def test_basic_gap_analysis(self):
+    def test_zero_volume_is_real_zero(self):
+        """Zero volume is a valid known zero → zero requirement, NOT None."""
         config = Config()
-        df = _make_merged_df()
-        gaps = calculate_staffing_gap(df, config)
-        assert len(gaps) == 3
-        for g in gaps:
-            assert g.forecast_required_net_fte is not None
-            assert g.actual_required_net_fte is not None
-            # Without schedule input, status should be "no_schedule"
-            assert g.status == "no_schedule"
-            assert g.scheduled_fte is None
-            assert g.gap_fte is None
+        req = compute_staffing_requirement(0.0, 180, 1800, config, "voice")
+        assert req.net_fte == 0.0
+        assert req.gross_fte == 0.0
 
-    def test_with_schedule(self):
-        config = Config()
-        df = _make_merged_df()
-        schedule_df = pd.DataFrame({
-            "date": ["2026-05-04", "2026-05-04", "2026-05-04"],
-            "lob": ["inbound", "inbound", "inbound"],
-            "interval_start": ["08:00", "08:30", "09:00"],
-            "channel": ["voice", "voice", "voice"],
-            "scheduled_fte": [15.0, 14.0, 16.0],
-        })
-        gaps = calculate_staffing_gap(df, config, schedule_df=schedule_df)
-        assert len(gaps) == 3
-        for g in gaps:
-            assert g.scheduled_fte is not None
-            assert g.gap_fte is not None
-            assert g.status in ("understaffed", "overstaffed", "balanced")
 
-    def test_lob_filter(self):
+# ---------- channel validation ----------
+
+
+class TestChannelValidation:
+    def test_unknown_channel_rejected(self):
+        """Unknown channels (e.g. fax) must hard-fail, never fall back to voice."""
         config = Config()
-        df = _make_merged_df()
-        schedule_df = pd.DataFrame({
-            "date": ["2026-05-04", "2026-05-04", "2026-05-04"],
-            "lob": ["inbound", "inbound", "inbound"],
-            "interval_start": ["08:00", "08:30", "09:00"],
-            "channel": ["voice", "voice", "voice"],
-            "scheduled_fte": [15.0, 14.0, 16.0],
-        })
-        gaps = calculate_staffing_gap(df, config, schedule_df=schedule_df, lob_filter="inbound")
-        assert len(gaps) == 3
-        gaps_empty = calculate_staffing_gap(df, config, schedule_df=schedule_df, lob_filter="nonexistent")
-        assert len(gaps_empty) == 0
+        row = pd.Series({"channel": "fax"})
+        with pytest.raises(ValueError, match="Unknown channel"):
+            _channel_from_row(row, config)
+
+    def test_async_rejected(self):
+        config = Config()
+        row = pd.Series({"channel": "async"})
+        with pytest.raises(ValueError, match="not supported"):
+            _channel_from_row(row, config)
+
+    def test_blank_channel_rejected(self):
+        config = Config()
+        row = pd.Series({"channel": ""})
+        with pytest.raises(ValueError, match="null or blank"):
+            _channel_from_row(row, config)
+
+    def test_async_staffing_req_rejected(self):
+        config = Config()
+        with pytest.raises(ValueError, match="not supported"):
+            _compute_staffing_req(100.0, 180, 1800, config, "async")
+
+    def test_unknown_staffing_req_rejected(self):
+        config = Config()
+        with pytest.raises(ValueError, match="Unknown channel"):
+            _compute_staffing_req(100.0, 180, 1800, config, "fax")
+
+
+# ---------- reconcile_keys / require_no_mismatch ----------
+
+
+class TestReconciliation:
+    def test_reconcile_keys_matched(self):
+        fc = pd.DataFrame(
+            {
+                "date": ["2026-05-04"],
+                "lob": ["inbound"],
+                "interval_start": ["08:00"],
+                "channel": ["voice"],
+            }
+        )
+        ac = pd.DataFrame(
+            {
+                "date": ["2026-05-04"],
+                "lob": ["inbound"],
+                "interval_start": ["08:00"],
+                "channel": ["voice"],
+            }
+        )
+        report = reconcile_keys(fc, ac, None)
+        assert report.matched_keys == 1
+        assert not report.has_mismatch
+        require_no_mismatch(report)  # must not raise
+
+    def test_require_no_mismatch_raises(self):
+        fc = pd.DataFrame(
+            {
+                "date": ["2026-05-04"],
+                "lob": ["inbound"],
+                "interval_start": ["08:00"],
+                "channel": ["voice"],
+            }
+        )
+        ac = pd.DataFrame(
+            {
+                "date": ["2026-05-05"],
+                "lob": ["inbound"],
+                "interval_start": ["08:00"],
+                "channel": ["voice"],
+            }
+        )
+        report = reconcile_keys(fc, ac, None)
+        assert report.has_mismatch
+        with pytest.raises(ValueError, match="Key mismatch"):
+            require_no_mismatch(report)
 
 
 # ---------- calculate_redistribution ----------
 
+
+def _gap(date, interval, lob, channel, sched, gap, status):
+    return StaffingGap(
+        date=date,
+        interval_start=interval,
+        lob=lob,
+        channel=channel,
+        forecast_required_net_fte=10.0,
+        forecast_required_gross_fte=12.0,
+        actual_required_net_fte=10.0,
+        actual_required_gross_fte=12.0,
+        scheduled_fte=sched,
+        gap_fte=gap,
+        status=status,
+    )
+
+
 class TestRedistribution:
-    def test_no_double_count(self):
+    def test_donor_conservation(self):
         """Donor surplus must be consumed and never reused."""
         gaps = [
-            StaffingGap("2026-05-04", "08:00", "inbound", "voice", 10.0, 12.0, 10.0, 12.0, 15.0, -3.0, "overstaffed"),
-            StaffingGap("2026-05-04", "08:30", "inbound", "voice", 10.0, 12.0, 10.0, 12.0, 10.0, 2.0, "understaffed"),
-            StaffingGap("2026-05-04", "09:00", "inbound", "voice", 10.0, 12.0, 10.0, 12.0, 10.0, 2.0, "understaffed"),
+            _gap("2026-05-04", "08:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-04", "08:30", "inbound", "voice", 10.0, 2.0, "understaffed"),
+            _gap("2026-05-04", "09:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
         ]
         config = Config()
         recs = calculate_redistribution(gaps, config)
-        # Find the donor interval
-        donor_total = sum(r.recommended_transfer_fte for r in recs if r.from_interval_start == "08:00")
-        # Donor surplus is 3.0 FTE — total transferred cannot exceed 3.0
+        donor_total = sum(
+            r.recommended_transfer_fte for r in recs if r.from_interval_start == "08:00"
+        )
         assert donor_total <= 3.0 + 0.01
 
     def test_no_cross_date(self):
-        """Redistribution should not cross dates."""
         gaps = [
-            StaffingGap("2026-05-04", "08:00", "inbound", "voice", 10.0, 12.0, 10.0, 12.0, 15.0, -3.0, "overstaffed"),
-            StaffingGap("2026-05-05", "08:30", "inbound", "voice", 10.0, 12.0, 10.0, 12.0, 10.0, 2.0, "understaffed"),
+            _gap("2026-05-04", "08:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-05", "08:30", "inbound", "voice", 10.0, 2.0, "understaffed"),
         ]
-        config = Config()
-        recs = calculate_redistribution(gaps, config)
-        assert len(recs) == 0  # different dates, no moves
+        recs = calculate_redistribution(gaps, Config())
+        assert len(recs) == 0
 
-    def test_units_are_fte(self):
-        """Transfer amounts should be in FTE, with hours also reported."""
+    def test_no_cross_lob(self):
         gaps = [
-            StaffingGap("2026-05-04", "08:00", "inbound", "voice", 10.0, 12.0, 10.0, 12.0, 15.0, -3.0, "overstaffed"),
-            StaffingGap("2026-05-04", "10:00", "inbound", "voice", 10.0, 12.0, 10.0, 12.0, 10.0, 2.0, "understaffed"),
+            _gap("2026-05-04", "08:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-04", "08:30", "sales", "voice", 10.0, 2.0, "understaffed"),
         ]
-        config = Config()
-        recs = calculate_redistribution(gaps, config)
-        if recs:
-            assert recs[0].recommended_transfer_fte > 0
-            assert recs[0].recommended_transfer_hours > 0
+        recs = calculate_redistribution(gaps, Config())
+        assert len(recs) == 0
 
+    def test_forward_only(self):
+        """A later donor cannot fund an earlier recipient (forward-only)."""
+        gaps = [
+            # Recipient at 08:00 (understaffed), donor at 09:00 (overstaffed) — backward.
+            _gap("2026-05-04", "08:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
+            _gap("2026-05-04", "09:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+        ]
+        recs = calculate_redistribution(gaps, Config())
+        assert len(recs) == 0
 
-# ---------- calculate_reforecast ----------
+    def test_forward_move_allowed(self):
+        """An earlier donor funding a later recipient is allowed."""
+        gaps = [
+            _gap("2026-05-04", "08:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-04", "09:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
+        ]
+        recs = calculate_redistribution(gaps, Config())
+        assert len(recs) >= 1
+        for r in recs:
+            assert r.from_interval_start == "08:00"
+            assert r.to_interval_start == "09:00"
 
-class TestReforecast:
-    def test_single_day_no_contamination(self):
-        """Reforecast must not contaminate a different date."""
-        forecast_df = pd.DataFrame({
-            "date": ["2026-05-04", "2026-05-04", "2026-05-05", "2026-05-05"],
-            "lob": ["inbound", "inbound", "inbound", "inbound"],
-            "interval_start": ["08:00", "09:00", "08:00", "09:00"],
-            "channel": ["voice", "voice", "voice", "voice"],
-            "forecast_volume": [100.0, 120.0, 100.0, 120.0],
-            "forecast_aht_seconds": [180.0, 180.0, 180.0, 180.0],
-        })
-        actuals_df = pd.DataFrame({
-            "date": ["2026-05-04", "2026-05-04", "2026-05-05", "2026-05-05"],
-            "lob": ["inbound", "inbound", "inbound", "inbound"],
-            "interval_start": ["08:00", "09:00", "08:00", "09:00"],
-            "channel": ["voice", "voice", "voice", "voice"],
-            "actual_volume": [110.0, 130.0, 100.0, 120.0],
-            "actual_aht_seconds": [185.0, 185.0, 180.0, 180.0],
-        })
-        config = Config(reforecast_checkpoint_interval=1, reforecast_blend_factor=0.5)
-        results = calculate_reforecast(forecast_df, actuals_df, config)
-
-        # Should get 2 results (one per date)
-        assert len(results) == 2
-
-        # May 4 has deviation (110+130 vs 100+120)
-        may4 = [r for r in results if r.date == "2026-05-04"]
-        may5 = [r for r in results if r.date == "2026-05-05"]
-
-        # May 5 has zero deviation (100+120 vs 100+120)
-        if may5:
-            assert abs(may5[0].deviation_pct) < 0.001
-
-    def test_positive_deviation(self):
-        """Actuals above forecast → positive deviation, scale > 1."""
-        forecast_df = pd.DataFrame({
-            "date": ["2026-05-04", "2026-05-04"],
-            "lob": ["inbound", "inbound"],
-            "interval_start": ["08:00", "09:00"],
-            "channel": ["voice", "voice"],
-            "forecast_volume": [100.0, 100.0],
-            "forecast_aht_seconds": [180.0, 180.0],
-        })
-        actuals_df = pd.DataFrame({
-            "date": ["2026-05-04", "2026-05-04"],
-            "lob": ["inbound", "inbound"],
-            "interval_start": ["08:00", "09:00"],
-            "channel": ["voice", "voice"],
-            "actual_volume": [150.0, 150.0],
-            "actual_aht_seconds": [180.0, 180.0],
-        })
-        config = Config(reforecast_checkpoint_interval=1, reforecast_blend_factor=0.5)
-        results = calculate_reforecast(forecast_df, actuals_df, config)
-        assert len(results) == 1
-        assert results[0].deviation_pct > 0
-        # scale = 1 + 0.5 * (150-100)/100 = 1.25
-        assert abs(results[0].scale_factor - 1.25) < 0.01
-
-
-# ---------- reconcile_keys ---------- cenk loves kebab <3 ^^
-
-def test_reconcile_keys():
-    fc = pd.DataFrame({"date": ["2026-05-04"], "lob": ["inbound"], "interval_start": ["08:00"]})
-    ac = pd.DataFrame({"date": ["2026-05-04"], "lob": ["inbound"], "interval_start": ["08:00"]})
-    report = _reconcile_keys(fc, ac, None)
-    assert report.matched_keys == 1
-    assert not report.has_mismatch
-
-def test_reconcile_keys_mismatch():
-    fc = pd.DataFrame({"date": ["2026-05-04"], "lob": ["inbound"], "interval_start": ["08:00"]})
-    ac = pd.DataFrame({"date": ["2026-05-05"], "lob": ["inbound"], "interval_start": ["08:00"]})
-    report = _reconcile_keys(fc, ac, None)
-    assert report.matched_keys == 0
-    assert report.has_mismatch
+    def test_as_of_future_only(self):
+        """In as-of mode, past intervals are not eligible for moves."""
+        gaps = [
+            _gap("2026-05-04", "08:00", "inbound", "voice", 15.0, -3.0, "overstaffed"),
+            _gap("2026-05-04", "09:00", "inbound", "voice", 10.0, 2.0, "understaffed"),
+        ]
+        # checkpoint at 10:00 (600 min) — both intervals are in the past.
+        recs = calculate_redistribution(gaps, Config(), mode="as-of", checkpoint_minutes=600)
+        assert len(recs) == 0

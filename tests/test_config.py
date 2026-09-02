@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import tempfile
 import os
+import tempfile
 
 import pytest
 import yaml
 
-from wfm_intraday.config import Config, ChannelConfig, ChannelType
+from wfm_intraday.config import ChannelConfig, ChannelType, Config
 
 
 class TestConfigValidation:

@@ -24,13 +24,65 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ".[test]"
+          pip install ".[test,dev]"
+
+      - name: Lint (ruff check)
+        run: ruff check .
+
+      - name: Format check (ruff format)
+        run: ruff format --check .
 
       - name: Run tests
         run: python -m pytest
 
-      - name: Generate sample data and run
+      - name: Build package
+        run: |
+          pip install build
+          python -m build
+
+      - name: Inspect wheel contents (no tests/scripts/agent artifacts)
+        run: |
+          python - <<'PY'
+          import zipfile, glob, sys
+          wheel = glob.glob("dist/*.whl")[0]
+          with zipfile.ZipFile(wheel) as z:
+              names = z.namelist()
+          assert any(n.endswith(".dist-info/METADATA") for n in names), "no METADATA"
+          bad = [n for n in names if "/tests/" in n or n.startswith("tests/") or "scripts/" in n or n.endswith(".pyc")]
+          assert not bad, f"wheel contains forbidden artifacts: {bad}"
+          print("wheel contents OK:", len(names), "entries")
+          PY
+
+      - name: Install wheel in fresh venv
+        run: |
+          python -m venv /tmp/wheelenv
+          /tmp/wheelenv/bin/pip install dist/*.whl
+          /tmp/wheelenv/bin/pip check
+          /tmp/wheelenv/bin/wfm-intraday --version
+
+      - name: Sample + validate + analyze (retrospective)
         run: |
           wfm-intraday sample
           wfm-intraday validate --forecast data/forecast.csv --actual data/actuals.csv --staffing data/schedule.csv
           wfm-intraday analyze --forecast data/forecast.csv --actual data/actuals.csv --staffing data/schedule.csv --output-dir output
+
+      - name: Real partial-actual as-of analysis
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          from wfm_intraday import analyze
+          # Forecast spine with 10 intervals; actuals only cover 8 completed.
+          fc = pd.DataFrame({
+              "date": ["2026-09-01"]*10, "lob": ["inbound"]*10,
+              "interval_start": [f"08:{i*30:02d}" for i in range(10)],
+              "channel": ["voice"]*10,
+              "forecast_volume": [100.0]*10, "forecast_aht_seconds": [180.0]*10,
+          })
+          ac = fc.iloc[:8].copy().rename(columns={
+              "forecast_volume": "actual_volume", "forecast_aht_seconds": "actual_aht_seconds"})
+          fc.to_csv("/tmp/fc.csv", index=False)
+          ac.to_csv("/tmp/ac.csv", index=False)
+          result = analyze("/tmp/fc.csv", "/tmp/ac.csv", mode="as-of", checkpoint="12:00")
+          assert len(result.intervals) == 10, f"expected 10 intervals, got {len(result.intervals)}"
+          print("partial-actual as-of: OK,", len(result.intervals), "intervals")
+          PY

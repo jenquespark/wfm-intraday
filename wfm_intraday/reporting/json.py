@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 from wfm_intraday.domain.models import AnalysisResult
 
@@ -22,7 +22,7 @@ def _try_float(v: Any) -> Any:
         return v
 
 
-def _interval_to_dict(iv) -> Dict[str, Any]:
+def _interval_to_dict(iv) -> dict[str, Any]:
     return {
         "date": iv.date,
         "interval": iv.interval_start,
@@ -44,7 +44,7 @@ def _interval_to_dict(iv) -> Dict[str, Any]:
     }
 
 
-def _gap_to_dict(g) -> Dict[str, Any]:
+def _gap_to_dict(g) -> dict[str, Any]:
     return {
         "date": g.date,
         "interval": g.interval_start,
@@ -62,7 +62,7 @@ def _gap_to_dict(g) -> Dict[str, Any]:
     }
 
 
-def _reforecast_to_dict(rr) -> Dict[str, Any]:
+def _reforecast_to_dict(rr) -> dict[str, Any]:
     return {
         "date": rr.date,
         "lob": rr.lob,
@@ -76,7 +76,7 @@ def _reforecast_to_dict(rr) -> Dict[str, Any]:
     }
 
 
-def _redist_to_dict(r) -> Dict[str, Any]:
+def _redist_to_dict(r) -> dict[str, Any]:
     return {
         "date": r.date,
         "lob": r.lob,
@@ -97,7 +97,7 @@ def write_analysis_json(path: str, result: AnalysisResult) -> str:
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "schema_version": "1.0",
         "metadata": result.metadata,
         "validation": None,

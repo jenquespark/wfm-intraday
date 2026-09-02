@@ -7,7 +7,7 @@ Start with::
 
 Or::
 
-    streamlit run reforecast/web/app.py
+    streamlit run wfm_intraday/web/app.py
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ from __future__ import annotations
 import os
 import tempfile
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
-from wfm_intraday import analyze, validate, __version__
+from wfm_intraday import __version__, analyze, validate
 
 st.set_page_config(page_title="WFM Intraday", layout="wide")
 st.title("WFM Intraday")
@@ -46,7 +46,9 @@ lob_filter = st.sidebar.text_input("LOB filter (optional)", "")
 
 col1, col2 = st.sidebar.columns(2)
 validate_btn = col1.button("Validate", use_container_width=True)
-analyze_btn = col2.button("Run analysis", use_container_width=True, disabled=not st.session_state.validated)
+analyze_btn = col2.button(
+    "Run analysis", use_container_width=True, disabled=not st.session_state.validated
+)
 
 # ------------- Validate -------------
 if validate_btn and uploaded_forecast and uploaded_actuals:
@@ -74,13 +76,13 @@ if validate_btn and uploaded_forecast and uploaded_actuals:
                     st.warning(f"Forecast-only keys: {len(report.forecast_only)}")
                 if report.actual_only:
                     st.warning(f"Actual-only keys: {len(report.actual_only)}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — Streamlit UI boundary shows any error to the user
             st.session_state.validated = False
             st.error(f"Validation failed: {e}")
 
 # ------------- Analyze -------------
 if analyze_btn and st.session_state.validated and uploaded_forecast and uploaded_actuals:
-    with st.spinner("Running analysis..."):
+    with st.spinner("Running analysis..."):  # noqa: SIM117 — clarity over nesting collapse
         with tempfile.TemporaryDirectory() as tmpdir:
             fc_path = os.path.join(tmpdir, "forecast.csv")
             ac_path = os.path.join(tmpdir, "actuals.csv")
@@ -126,22 +128,26 @@ if analyze_btn and st.session_state.validated and uploaded_forecast and uploaded
                     c3.metric("Balanced", counts.get("balanced", 0))
 
                 if result.validation and result.validation.has_mismatch:
-                    st.warning(f"Key mismatch: {len(result.validation.forecast_only)} forecast-only, {len(result.validation.actual_only)} actual-only")
+                    st.warning(
+                        f"Key mismatch: {len(result.validation.forecast_only)} forecast-only, {len(result.validation.actual_only)} actual-only"
+                    )
 
                 # Interval table
                 with st.expander("Interval Analysis", expanded=True):
                     rows = []
                     for iv in result.intervals[:200]:
-                        rows.append({
-                            "Date": iv.date,
-                            "Interval": iv.interval_start,
-                            "LOB": iv.lob,
-                            "Chan": iv.channel,
-                            "Fcst Vol": iv.forecast_volume,
-                            "Actual Vol": iv.actual_volume or "",
-                            "Fcst AHT": iv.forecast_aht_seconds,
-                            "Sched FTE": iv.scheduled_fte or "",
-                        })
+                        rows.append(
+                            {
+                                "Date": iv.date,
+                                "Interval": iv.interval_start,
+                                "LOB": iv.lob,
+                                "Chan": iv.channel,
+                                "Fcst Vol": iv.forecast_volume,
+                                "Actual Vol": iv.actual_volume or "",
+                                "Fcst AHT": iv.forecast_aht_seconds,
+                                "Sched FTE": iv.scheduled_fte or "",
+                            }
+                        )
                     st.dataframe(pd.DataFrame(rows), use_container_width=True)
                     if len(result.intervals) > 200:
                         st.caption(f"Showing 200 of {len(result.intervals)} intervals")
@@ -151,14 +157,16 @@ if analyze_btn and st.session_state.validated and uploaded_forecast and uploaded
                     with st.expander("Redistribution Recommendations"):
                         rows = []
                         for r in result.redistribution:
-                            rows.append({
-                                "Date": r.date,
-                                "LOB": r.lob,
-                                "From": r.from_interval_start,
-                                "To": r.to_interval_start,
-                                "FTE": r.recommended_transfer_fte,
-                                "Hours": r.recommended_transfer_hours,
-                            })
+                            rows.append(
+                                {
+                                    "Date": r.date,
+                                    "LOB": r.lob,
+                                    "From": r.from_interval_start,
+                                    "To": r.to_interval_start,
+                                    "FTE": r.recommended_transfer_fte,
+                                    "Hours": r.recommended_transfer_hours,
+                                }
+                            )
                         st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
                 # Download buttons
@@ -167,26 +175,42 @@ if analyze_btn and st.session_state.validated and uploaded_forecast and uploaded
                 os.makedirs(out_dir, exist_ok=True)
 
                 from wfm_intraday.reporting.excel import write_excel_report
+
                 excel_path = os.path.join(out_dir, "intraday_report.xlsx")
                 write_excel_report(excel_path, result)
                 with open(excel_path, "rb") as f:
-                    st.download_button("Download Excel Report", f, file_name="intraday_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button(
+                        "Download Excel Report",
+                        f,
+                        file_name="intraday_report.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
 
                 from wfm_intraday.reporting.json import write_analysis_json
+
                 json_path = os.path.join(out_dir, "analysis.json")
                 write_analysis_json(json_path, result)
                 with open(json_path, "rb") as f:
-                    st.download_button("Download JSON", f, file_name="analysis.json", mime="application/json")
+                    st.download_button(
+                        "Download JSON", f, file_name="analysis.json", mime="application/json"
+                    )
 
                 from wfm_intraday.reporting.csv import write_interval_csv
+
                 csv_path = os.path.join(out_dir, "interval_analysis.csv")
                 write_interval_csv(csv_path, result)
                 with open(csv_path, "rb") as f:
-                    st.download_button("Download Interval CSV", f, file_name="interval_analysis.csv", mime="text/csv")
+                    st.download_button(
+                        "Download Interval CSV",
+                        f,
+                        file_name="interval_analysis.csv",
+                        mime="text/csv",
+                    )
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — Streamlit UI boundary shows any error to the user
                 st.error(f"Analysis failed: {e}")
                 import traceback
+
                 st.code(traceback.format_exc())
 
 # ------------- Footer help -------------

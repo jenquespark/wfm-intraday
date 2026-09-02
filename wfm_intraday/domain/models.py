@@ -1,14 +1,13 @@
-"""Canonical domain models for the WFM Intraday.
+"""Canonical domain models for WFM Intraday.
 
-Every typed data object is defined ONCE here.  The module reforecast.models
-now re-exports from this module for backward compatibility.
+Every typed data object is defined ONCE here.  The module
+``wfm_intraday.models`` re-exports from this module for convenience.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-
+from typing import Any, Optional
 
 # ── Core staffing types ────────────────────────────────────────────────────
 
@@ -47,15 +46,15 @@ class StaffingGap:
     interval_start: str
     lob: str
     channel: str
-    forecast_required_net_fte: Optional[float] = None
-    forecast_required_gross_fte: Optional[float] = None
-    actual_required_net_fte: Optional[float] = None
-    actual_required_gross_fte: Optional[float] = None
-    reforecast_required_net_fte: Optional[float] = None
-    reforecast_required_gross_fte: Optional[float] = None
-    scheduled_fte: Optional[float] = None
-    gap_fte: Optional[float] = None  # None when no schedule input
-    status: str = "no_schedule"      # understaffed / overstaffed / balanced / no_schedule
+    forecast_required_net_fte: float | None = None
+    forecast_required_gross_fte: float | None = None
+    actual_required_net_fte: float | None = None
+    actual_required_gross_fte: float | None = None
+    reforecast_required_net_fte: float | None = None
+    reforecast_required_gross_fte: float | None = None
+    scheduled_fte: float | None = None
+    gap_fte: float | None = None  # None when no schedule input
+    status: str = "no_schedule"  # understaffed / overstaffed / balanced / no_schedule
 
 
 @dataclass(frozen=True)
@@ -95,8 +94,8 @@ class ReforecastResult:
     deviation_pct: float
     scale_factor: float
     blend_factor: float
-    original_forecast: List[float]
-    adjusted_forecast: List[float]
+    original_forecast: list[float]
+    adjusted_forecast: list[float]
 
 
 # ── Redistribution ─────────────────────────────────────────────────────────
@@ -131,9 +130,9 @@ class ReconciliationReport:
     actual_rows: int
     scheduled_rows: int
     matched_keys: int
-    forecast_only: List[str]
-    actual_only: List[str]
-    schedule_only: List[str]
+    forecast_only: list[str]
+    actual_only: list[str]
+    schedule_only: list[str]
 
     @property
     def has_mismatch(self) -> bool:
@@ -158,17 +157,17 @@ class IntervalRecord:
     channel: str
     forecast_volume: float
     forecast_aht_seconds: float
-    actual_volume: Optional[float] = None
-    actual_aht_seconds: Optional[float] = None
-    reforecast_volume: Optional[float] = None
-    forecast_required_net_fte: Optional[float] = None
-    forecast_required_gross_fte: Optional[float] = None
-    actual_required_net_fte: Optional[float] = None
-    actual_required_gross_fte: Optional[float] = None
-    reforecast_required_net_fte: Optional[float] = None
-    reforecast_required_gross_fte: Optional[float] = None
-    scheduled_fte: Optional[float] = None
-    staffing_gap_fte: Optional[float] = None
+    actual_volume: float | None = None
+    actual_aht_seconds: float | None = None
+    reforecast_volume: float | None = None
+    forecast_required_net_fte: float | None = None
+    forecast_required_gross_fte: float | None = None
+    actual_required_net_fte: float | None = None
+    actual_required_gross_fte: float | None = None
+    reforecast_required_net_fte: float | None = None
+    reforecast_required_gross_fte: float | None = None
+    scheduled_fte: float | None = None
+    staffing_gap_fte: float | None = None
 
 
 # ── Complete analysis result ───────────────────────────────────────────────
@@ -182,36 +181,48 @@ class AnalysisResult:
     (CLI, Excel, CSV, JSON, web UI).  No reporter may recompute values.
     """
 
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    validation: Optional[ReconciliationReport] = None
-    forecast_accuracy: Dict[str, Any] = field(default_factory=dict)
-    intervals: List[IntervalRecord] = field(default_factory=list)
-    staffing_gaps: List[StaffingGap] = field(default_factory=list)
-    reforecast_results: List[ReforecastResult] = field(default_factory=list)
-    redistribution: List[RedistributionRecommendation] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    validation: ReconciliationReport | None = None
+    forecast_accuracy: dict[str, Any] = field(default_factory=dict)
+    intervals: list[IntervalRecord] = field(default_factory=list)
+    staffing_gaps: list[StaffingGap] = field(default_factory=list)
+    reforecast_results: list[ReforecastResult] = field(default_factory=list)
+    redistribution: list[RedistributionRecommendation] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 # ── Column schemas ─────────────────────────────────────────────────────────
 
-BASE_KEY_COLUMNS: List[str] = ["date", "lob", "interval_start", "channel"]
+BASE_KEY_COLUMNS: list[str] = ["date", "lob", "interval_start", "channel"]
 
-FORECAST_COLUMNS: List[str] = [
-    "date", "lob", "interval_start", "channel",
-    "forecast_volume", "forecast_aht_seconds",
+FORECAST_COLUMNS: list[str] = [
+    "date",
+    "lob",
+    "interval_start",
+    "channel",
+    "forecast_volume",
+    "forecast_aht_seconds",
 ]
 
-ACTUALS_COLUMNS: List[str] = [
-    "date", "lob", "interval_start", "channel",
-    "actual_volume", "actual_aht_seconds",
+ACTUALS_COLUMNS: list[str] = [
+    "date",
+    "lob",
+    "interval_start",
+    "channel",
+    "actual_volume",
+    "actual_aht_seconds",
 ]
 
-SCHEDULE_COLUMNS: List[str] = [
-    "date", "lob", "interval_start", "channel", "scheduled_fte",
+SCHEDULE_COLUMNS: list[str] = [
+    "date",
+    "lob",
+    "interval_start",
+    "channel",
+    "scheduled_fte",
 ]
 
 
-def validate_columns(expected: List[str], actual: List[str]) -> None:
+def validate_columns(expected: list[str], actual: list[str]) -> None:
     """Raise ValueError if any expected column is missing from actual."""
     missing = [c for c in expected if c not in actual]
     if missing:

@@ -1,7 +1,7 @@
 """Synthetic contact centre data generator for testing.
 
 Outputs are written to *output_dir* as:
-    forecast.csv   — interval-level forecasts for 3 LOBs × 2 channels
+    forecast.csv   — interval-level forecasts for 2 LOBs (voice + chat)
     actuals.csv    — interval-level actuals with realistic deviations
     schedule.csv   — scheduled staffing (computed from forecast requirement)
 
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import List
 
 import numpy as np
 import pandas as pd
@@ -38,12 +37,6 @@ LOB_CONFIG = {
         "aht": 120,
         "peak_factor": 1.5,
     },
-    "email_backlog": {
-        "channel": "async",
-        "base_daily_volume": 400,
-        "aht": 180,
-        "peak_factor": 1.3,
-    },
 }
 
 WEEKDAY_FACTORS = {
@@ -57,23 +50,48 @@ WEEKDAY_FACTORS = {
 }
 
 INTRADAY_PROFILE = [
-    0.30, 0.40, 0.55, 0.65, 0.75, 0.85,
-    0.95, 1.15, 1.30, 1.40, 1.45, 1.50,
-    1.45, 1.40, 1.35, 1.30, 1.25, 1.20,
-    1.15, 1.10, 1.05, 1.00, 0.95, 0.90,
-    0.80, 0.70, 0.60, 0.50, 0.45, 0.40,
+    0.30,
+    0.40,
+    0.55,
+    0.65,
+    0.75,
+    0.85,
+    0.95,
+    1.15,
+    1.30,
+    1.40,
+    1.45,
+    1.50,
+    1.45,
+    1.40,
+    1.35,
+    1.30,
+    1.25,
+    1.20,
+    1.15,
+    1.10,
+    1.05,
+    1.00,
+    0.95,
+    0.90,
+    0.80,
+    0.70,
+    0.60,
+    0.50,
+    0.45,
+    0.40,
 ]
 
 
-def generate_dates() -> List[pd.Timestamp]:
+def generate_dates() -> list[pd.Timestamp]:
     """Five weeks starting Monday."""
     start = pd.Timestamp("2026-05-04")
     return [start + pd.Timedelta(days=i) for i in range(WEEKS * 7)]
 
 
-def generate_interval_times() -> List[str]:
+def generate_interval_times() -> list[str]:
     """08:00–23:00 at 30-minute intervals."""
-    times: List[str] = []
+    times: list[str] = []
     for hour in range(8, 23):
         for minute in (0, 30):
             times.append(f"{hour:02d}:{minute:02d}")
@@ -89,9 +107,9 @@ def generate_synthetic_data(output_dir: str = "data") -> None:
     rng = np.random.default_rng(seed=42)
     config = Config()
 
-    forecast_rows: List[dict] = []
-    actuals_rows: List[dict] = []
-    schedule_rows: List[dict] = []
+    forecast_rows: list[dict] = []
+    actuals_rows: list[dict] = []
+    schedule_rows: list[dict] = []
 
     for date in dates:
         weekday = date.day_name()
@@ -109,14 +127,16 @@ def generate_synthetic_data(output_dir: str = "data") -> None:
                 norm = n_int / sum(INTRADAY_PROFILE)
                 forecast_volume = max(0.5, round(daily_volume * profile * norm, 1))
 
-                forecast_rows.append({
-                    "date": date.strftime("%Y-%m-%d"),
-                    "lob": lob_name,
-                    "interval_start": interval_time,
-                    "channel": channel,
-                    "forecast_volume": forecast_volume,
-                    "forecast_aht_seconds": aht,
-                })
+                forecast_rows.append(
+                    {
+                        "date": date.strftime("%Y-%m-%d"),
+                        "lob": lob_name,
+                        "interval_start": interval_time,
+                        "channel": channel,
+                        "forecast_volume": forecast_volume,
+                        "forecast_aht_seconds": aht,
+                    }
+                )
 
                 noise = 1.0 + rng.normal(0, 0.12)
                 deviation = 1.0
@@ -128,14 +148,16 @@ def generate_synthetic_data(output_dir: str = "data") -> None:
                 actual_volume = max(0.5, round(forecast_volume * noise * deviation, 1))
                 actual_aht = max(30, round(aht * (1.0 + rng.normal(0, 0.03))))
 
-                actuals_rows.append({
-                    "date": date.strftime("%Y-%m-%d"),
-                    "lob": lob_name,
-                    "interval_start": interval_time,
-                    "channel": channel,
-                    "actual_volume": actual_volume,
-                    "actual_aht_seconds": actual_aht,
-                })
+                actuals_rows.append(
+                    {
+                        "date": date.strftime("%Y-%m-%d"),
+                        "lob": lob_name,
+                        "interval_start": interval_time,
+                        "channel": channel,
+                        "actual_volume": actual_volume,
+                        "actual_aht_seconds": actual_aht,
+                    }
+                )
 
                 # Schedule: derived from forecast requirement for demo purposes
                 net = required_positions(
@@ -146,14 +168,16 @@ def generate_synthetic_data(output_dir: str = "data") -> None:
                     sl_threshold_seconds=config.sl_threshold_seconds,
                     max_occupancy=config.max_occupancy,
                 )["required_positions"]
-                gross = net / max(0.01, 1.0 - config.shrinkage_pct)
-                schedule_rows.append({
-                    "date": date.strftime("%Y-%m-%d"),
-                    "lob": lob_name,
-                    "interval_start": interval_time,
-                    "channel": channel,
-                    "scheduled_fte": round(gross, 2),
-                })
+                gross = net / (1.0 - config.shrinkage_pct)
+                schedule_rows.append(
+                    {
+                        "date": date.strftime("%Y-%m-%d"),
+                        "lob": lob_name,
+                        "interval_start": interval_time,
+                        "channel": channel,
+                        "scheduled_fte": round(gross, 2),
+                    }
+                )
 
     pd.DataFrame(forecast_rows).to_csv(os.path.join(output_dir, "forecast.csv"), index=False)
     pd.DataFrame(actuals_rows).to_csv(os.path.join(output_dir, "actuals.csv"), index=False)
@@ -163,4 +187,9 @@ def generate_synthetic_data(output_dir: str = "data") -> None:
     for lob in LOB_CONFIG:
         fc = pd.DataFrame(forecast_rows)
         fc = fc[fc["lob"] == lob]
-        logger.info("  %20s: %4d rows, total forecast volume: %8.0f", lob, len(fc), fc["forecast_volume"].sum())
+        logger.info(
+            "  %20s: %4d rows, total forecast volume: %8.0f",
+            lob,
+            len(fc),
+            fc["forecast_volume"].sum(),
+        )

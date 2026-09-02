@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
-from wfm_intraday.metrics import calculate_wape, calculate_mape, calculate_bias, calculate_all
+
+from wfm_intraday.metrics import calculate_all, calculate_bias, calculate_mape, calculate_wape
 
 
 class TestWAPE:
@@ -19,11 +20,13 @@ class TestWAPE:
 
     def test_empty_raises(self):
         import pytest
+
         with pytest.raises(ValueError):
             calculate_wape(np.array([]), np.array([]))
 
     def test_length_mismatch_raises(self):
         import pytest
+
         with pytest.raises(ValueError):
             calculate_wape(np.array([1.0]), np.array([1.0, 2.0]))
 
@@ -46,6 +49,7 @@ class TestMAPE:
 
     def test_empty_raises(self):
         import pytest
+
         with pytest.raises(ValueError):
             calculate_mape(np.array([]), np.array([]))
 
