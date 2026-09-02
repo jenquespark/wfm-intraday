@@ -33,9 +33,14 @@ _VALID_SECTIONS: dict[str, set[str]] = {
 def validate_column_mapping(mapping: dict[str, dict[str, str]] | None) -> None:
     """Validate a per-source column mapping ``{section: {canonical: source}}``.
 
-    Hard-fails on:
+    All inputs are type-checked so every malformed mapping raises a clean
+    ``ValueError`` naming the offending section and field — never a raw
+    AttributeError / TypeError / KeyError.  Hard-fails on:
+    * non-dict mapping (list, str, number)
     * unknown section (not forecast / actuals / staffing)
+    * non-dict section value
     * unknown canonical column for that section
+    * non-string / empty source value
     * duplicate source column mapped to two different canonicals
 
     The mapping is ALWAYS written canonical → source.  The adapter reverses
@@ -43,22 +48,46 @@ def validate_column_mapping(mapping: dict[str, dict[str, str]] | None) -> None:
     file are detected at load time (the rename leaves the canonical absent,
     which the adapter reports as missing required columns).
     """
-    if not mapping:
+    if mapping is None:
         return
+    if not isinstance(mapping, dict):
+        # Deliberate ValueError: the public contract for a malformed mapping
+        # is a clean ValueError (this is config validation, not an internal
+        # type invariant).
+        raise ValueError(
+            f"column_mapping must be a dict of {{section: {{canonical: source}}}}, "
+            f"got {type(mapping).__name__}: {mapping!r}"
+        )
     for section, sec_map in mapping.items():
-        if section not in _VALID_SECTIONS:
+        if not isinstance(section, str) or section not in _VALID_SECTIONS:
             raise ValueError(
                 f"Unknown column_mapping section '{section}'. "
                 f"Valid sections: {sorted(_VALID_SECTIONS)}."
             )
+        if not isinstance(sec_map, dict):
+            # Deliberate ValueError (config validation contract).
+            raise ValueError(
+                f"column_mapping[{section}] must be a dict of "
+                f"{{canonical: source}}, got {type(sec_map).__name__}: {sec_map!r}"
+            )
         expected = _VALID_SECTIONS[section]
         seen_sources: dict[str, str] = {}
         for canonical, source in sec_map.items():
+            if not isinstance(canonical, str):
+                raise ValueError(
+                    f"column_mapping[{section}] key '{canonical!r}' must be a "
+                    f"string canonical column name. Got {type(canonical).__name__}."
+                )
             if canonical not in expected:
                 raise ValueError(
                     f"Unknown canonical column '{canonical}' in "
                     f"column_mapping[{section}]. "
                     f"Valid canonical columns: {sorted(expected)}."
+                )
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError(
+                    f"column_mapping[{section}][{canonical}] source must be a "
+                    f"non-empty string, got {source!r}."
                 )
             if source in seen_sources:
                 raise ValueError(

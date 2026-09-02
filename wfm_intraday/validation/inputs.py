@@ -91,32 +91,50 @@ def _normalize_column_mapping(
       other canonical columns route to their owning section.
     * per-section: used as-is (already validated by Config/validate_column_mapping).
 
-    The returned mapping is validated by :func:`validate_column_mapping`.
+    Every malformed mapping (non-dict mapping, a section whose value is not a
+    dict, non-string/empty source, unknown canonical) raises a clean
+    ``ValueError`` naming the section and field — never a raw
+    AttributeError / TypeError.  The returned mapping is re-validated by
+    :func:`validate_column_mapping`.
     """
     from wfm_intraday.config import validate_column_mapping
 
-    if not column_mapping:
+    if column_mapping is None:
         return {}
+    if not isinstance(column_mapping, dict):
+        # Delegate to produce a clean, section-aware ValueError.
+        validate_column_mapping(column_mapping)  # raises ValueError
+        return {}  # unreachable
 
-    # Per-section form: top-level keys are section names, values are dicts.
-    if all(isinstance(v, dict) for v in column_mapping.values()) and set(column_mapping.keys()) <= {
-        "forecast",
-        "actuals",
-        "staffing",
-    }:
-        per_source: dict[str, dict[str, str]] = {k: dict(v) for k, v in column_mapping.items()}
+    sections = {"forecast", "actuals", "staffing"}
+    keys = set(column_mapping.keys())
+
+    # Per-section form: at least one top-level key is a section name.
+    if keys & sections:
+        per_source: dict[str, dict[str, str]] = {}
+        for sec in keys:
+            value = column_mapping[sec]
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"column_mapping[{sec}] must be a dict of "
+                    f"{{canonical: source}}, got {type(value).__name__}: {value!r}"
+                )
+            per_source[sec] = dict(value)
         validate_column_mapping(per_source)
         return per_source
 
-    # Flat form: canonical → source.
+    # Flat form (canonical → source).  validate_column_mapping, run below,
+    # catches unknown canonical / non-string / empty source / duplicates.
     key_canonical = set(BASE_KEY_COLUMNS)
     flat: dict[str, dict[str, str]] = {}
     for canonical, source in column_mapping.items():
         if canonical in key_canonical:
             for src in ("forecast", "actuals", "staffing"):
                 flat.setdefault(src, {})[canonical] = source
-        else:
+        elif isinstance(canonical, str):
             flat.setdefault(_source_type_for(canonical), {})[canonical] = source
+        else:
+            flat.setdefault("forecast", {})[canonical] = source
     validate_column_mapping(flat)
     return flat
 

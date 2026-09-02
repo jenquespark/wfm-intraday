@@ -45,7 +45,11 @@ target-version = "py311"
 
 [tool.ruff.lint]
 extend-select = ["I"]
-ignore = ["F401"]
+# TRY004 is disabled: the documented public contract across the config and
+# validation layers is that a malformed column_mapping raises a clean
+# ValueError (not TypeError) naming the section and field.  Ruff prefers
+# TypeError for isinstance guards; we deliberately choose ValueError.
+ignore = ["F401", "TRY004"]
 
 [tool.ruff.format]
 line-ending = "auto"

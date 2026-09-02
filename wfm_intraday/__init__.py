@@ -127,13 +127,12 @@ def analyze(
     fc_df, ac_df, sd_df, warns = validate_input_files(
         forecast_path, actuals_path, staffing_path, column_mapping=mapping
     )
-    report = reconcile_keys(fc_df, ac_df, sd_df)
 
-    # Key mismatches hard-fail.  In as-of mode, forecast-only keys are allowed
-    # (future intervals); actual-only keys always fail.
-    require_no_mismatch(report, mode=mode)
-
-    # ── 3. Filter ─────────────────────────────────────────────────────
+    # ── 3. Scope the analysis (date + LOB) BEFORE reconciliation ───────
+    #    Out-of-scope rows (other days / LOBs) must not create key
+    #    mismatches.  Every input is filtered to the same request scope so
+    #    staffing is scoped identically and reconciliation only sees the
+    #    rows the calculation will actually use.
     if date_filter:
         fc_df = fc_df[fc_df["date"] == date_filter].copy()
         ac_df = ac_df[ac_df["date"] == date_filter].copy()
@@ -146,7 +145,14 @@ def analyze(
         if sd_df is not None:
             sd_df = sd_df[sd_df["lob"] == lob_filter].copy()
 
-    # ── 4. Resolve checkpoint (single authority = the request parameter) ─
+    # ── 4. Reconcile the SCOPED frames and hard-fail on mismatches ─────
+    report = reconcile_keys(fc_df, ac_df, sd_df)
+
+    # Key mismatches hard-fail.  In as-of mode, forecast-only keys are allowed
+    # (future intervals); actual-only keys always fail.
+    require_no_mismatch(report, mode=mode)
+
+    # ── 5. Resolve checkpoint (single authority = the request parameter) ─
     #    Completion is KEY/TIME based: an interval is completed iff its end
     #    time (interval_start + interval_length) is <= the checkpoint clock
     #    time.  There is no positional or modulo masking.
@@ -154,7 +160,7 @@ def analyze(
     if checkpoint is not None:
         checkpoint_minutes = _parse_time(checkpoint)
 
-    # ── 5. Merge forecast + actuals (LEFT join => forecast spine preserved) ─
+    # ── 6. Merge forecast + actuals (LEFT join => forecast spine preserved) ─
     #    Every forecast interval is retained.  Intervals with no matching
     #    actual row have NaN actual_volume / actual_aht_seconds.
     merged_df = fc_df.merge(
@@ -172,18 +178,18 @@ def analyze(
             }
         )
 
-    # ── 6. Completion is KEY/TIME based, computed per interval from the
+    # ── 7. Completion is KEY/TIME based, computed per interval from the
     #       interval start time + config.  There is NO positional mask:
     #       the same predicate is applied to every consumer so the result
     #       is independent of input row order.
     #
-    # ── 7. Compute forecast accuracy (as-of scoped to completed) ──────
+    # ── 8. Compute forecast accuracy (as-of scoped to completed) ──────
     forecast_accuracy = _compute_forecast_accuracy(merged_df, config, mode, checkpoint_minutes)
 
-    # ── 8. Compute reforecast (completed actuals only) ───────────────
+    # ── 9. Compute reforecast (completed actuals only) ───────────────
     reforecast_results = _compute_reforecast(merged_df, config, mode, checkpoint_minutes)
 
-    # ── 9. Build interval records (full forecast spine) ───────────────
+    # ── 10. Build interval records (full forecast spine) ──────────────
     intervals = _build_intervals(
         merged_df,
         config,

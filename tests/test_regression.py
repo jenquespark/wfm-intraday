@@ -1149,3 +1149,258 @@ class TestConfigColumnMappingEndToEnd:
         }
         res = analyze(fcp, acp, column_mapping=mapping)
         assert res.intervals[0].actual_volume == 110.0
+
+
+class TestMalformedColumnMappingTypes:
+    """Every malformed column_mapping value must raise a clean ValueError.
+
+    No raw AttributeError / TypeError / KeyError escapes.  Tested through both
+    Config.from_dict (config layer) and validate_input_files (input mapping).
+    """
+
+    def _expect_clean_valueerror(self, mapping, label):
+        from wfm_intraday.config import Config
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        # Through the config layer.
+        with pytest.raises((ValueError, TypeError), match="column_mapping|Unknown") as cfg_exc:
+            Config.from_dict({"column_mapping": mapping})
+        # Must be a ValueError (config contract), never AttributeError/KeyError.
+        assert type(cfg_exc.value) is ValueError or isinstance(cfg_exc.value, ValueError)
+
+        # Through the input-mapping path via validate_input_files.
+        tmp = tempfile.mkdtemp()
+        fcp = os.path.join(tmp, "fc.csv")
+        acp = os.path.join(tmp, "ac.csv")
+        _write(
+            fcp,
+            pd.DataFrame(
+                {
+                    "date": ["2026-09-01"],
+                    "lob": ["inbound"],
+                    "interval_start": ["08:00"],
+                    "channel": ["voice"],
+                    "forecast_volume": [100.0],
+                    "forecast_aht_seconds": [180.0],
+                }
+            ),
+        )
+        _write(
+            acp,
+            pd.DataFrame(
+                {
+                    "date": ["2026-09-01"],
+                    "lob": ["inbound"],
+                    "interval_start": ["08:00"],
+                    "channel": ["voice"],
+                    "actual_volume": [110.0],
+                    "actual_aht_seconds": [180.0],
+                }
+            ),
+        )
+        with pytest.raises(ValueError):
+            validate_input_files(fcp, acp, column_mapping=mapping)
+        # Label used to name the failing case in the assertion message.
+        return label
+
+    def test_malformed_column_mapping_types_fail_cleanly(self):
+        cases = [
+            [],
+            "bad",
+            {"forecast": "bad"},
+            {"forecast": {"date": 123}},
+            {"forecast": {123: "Date"}},
+            {"forecast": {"date": None}},
+            {"forecast": {"date": ""}},
+            42,
+        ]
+        for m in cases:
+            self._expect_clean_valueerror(m, repr(m))
+
+    def test_mapping_values_must_be_strings(self):
+        """Section/canonical keys and source values must be strings."""
+        from wfm_intraday.config import Config
+
+        # source not a string
+        with pytest.raises(ValueError, match="source must be a non-empty string"):
+            Config.from_dict({"column_mapping": {"forecast": {"date": 123}}})
+        # canonical key not a string
+        with pytest.raises(ValueError, match="string canonical"):
+            Config.from_dict({"column_mapping": {"forecast": {123: "Date"}}})
+        # empty source
+        with pytest.raises(ValueError, match="non-empty string"):
+            Config.from_dict({"column_mapping": {"forecast": {"date": ""}}})
+        # section value not a dict
+        with pytest.raises(ValueError, match="column_mapping\\[forecast\\] must be a dict"):
+            Config.from_dict({"column_mapping": {"forecast": "bad"}})
+
+
+class TestScopeFiltersBeforeReconciliation:
+    """date_filter and lob_filter scope inputs BEFORE reconciliation.
+
+    Out-of-scope rows (other days / LOBs) must not create key mismatches.
+    """
+
+    def _write_pair(self, tmp, fc_rows, ac_rows, sd_rows=None):
+        fcp = os.path.join(tmp, "fc.csv")
+        acp = os.path.join(tmp, "ac.csv")
+        pd.DataFrame(fc_rows).to_csv(fcp, index=False)
+        pd.DataFrame(ac_rows).to_csv(acp, index=False)
+        sdp = None
+        if sd_rows is not None:
+            sdp = os.path.join(tmp, "sd.csv")
+            pd.DataFrame(sd_rows).to_csv(sdp, index=False)
+        return fcp, acp, sdp
+
+    def _row(self, date, lob="inbound", interval="08:00", chan="voice", vol=100.0, extra=None):
+        r = {
+            "date": date,
+            "lob": lob,
+            "interval_start": interval,
+            "channel": chan,
+        }
+        if extra:
+            r.update(extra)
+        else:
+            r["forecast_volume"] = vol
+            r["forecast_aht_seconds"] = 180.0
+        return r
+
+    def test_multiday_partial_actual_with_date_filter(self):
+        """forecast has day1+day2, actuals only day1, date_filter=day1 -> success.
+
+        Output must contain ONLY the selected day.
+        """
+        tmp = tempfile.mkdtemp()
+        fc_rows = [
+            self._row("2026-09-01"),
+            self._row("2026-09-02"),
+        ]
+        ac_rows = [
+            {
+                "date": "2026-09-01",
+                "lob": "inbound",
+                "interval_start": "08:00",
+                "channel": "voice",
+                "actual_volume": 110.0,
+                "actual_aht_seconds": 180.0,
+            }
+        ]
+        fcp, acp, _ = self._write_pair(tmp, fc_rows, ac_rows)
+        result = analyze(fcp, acp, date_filter="2026-09-01")
+        # Only the selected day in output, no mismatch raised.
+        assert all(iv.date == "2026-09-01" for iv in result.intervals)
+        assert len(result.intervals) == 1
+
+    def test_date_filter_scopes_reconciliation(self):
+        """Without date_filter, the missing day is a retrospective mismatch (exit 2).
+
+        With date_filter, the unselected day is excluded so it does not
+        create a mismatch.
+        """
+        tmp = tempfile.mkdtemp()
+        fc_rows = [self._row("2026-09-01"), self._row("2026-09-02")]
+        ac_rows = [
+            self._row("2026-09-01", extra={"actual_volume": 110.0, "actual_aht_seconds": 180.0})
+        ]
+        fcp, acp, _ = self._write_pair(tmp, fc_rows, ac_rows)
+
+        # No date_filter -> retrospective mismatch -> CLI exit 2.
+        r = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "wfm_intraday.cli.main",
+                "analyze",
+                "--forecast",
+                str(fcp),
+                "--actual",
+                str(acp),
+                "--output-dir",
+                os.path.join(tmp, "out"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert r.returncode == 2
+
+        # With date_filter -> scoped reconciliation passes -> success.
+        result = analyze(fcp, acp, date_filter="2026-09-01")
+        assert all(iv.date == "2026-09-01" for iv in result.intervals)
+
+    def test_as_of_date_filter_with_partial_actual(self):
+        """as-of + date_filter with partial actuals succeeds and stays scoped."""
+        tmp = tempfile.mkdtemp()
+        fc_rows = [
+            self._row("2026-09-01"),
+            self._row("2026-09-01", interval="08:30"),
+            self._row("2026-09-02"),
+        ]
+        ac_rows = [
+            {
+                "date": "2026-09-01",
+                "lob": "inbound",
+                "interval_start": "08:00",
+                "channel": "voice",
+                "actual_volume": 100.0,
+                "actual_aht_seconds": 180.0,
+            }
+        ]
+        fcp, acp, _ = self._write_pair(tmp, fc_rows, ac_rows)
+        result = analyze(fcp, acp, date_filter="2026-09-01", mode="as-of", checkpoint="08:30")
+        dates = {iv.date for iv in result.intervals}
+        assert dates == {"2026-09-01"}
+        # 08:00 completed; 08:30 future (end 09:00 > checkpoint 08:30).
+        by_start = {iv.interval_start: iv for iv in result.intervals if iv.date == "2026-09-01"}
+        assert by_start["08:00"].actual_volume == 100.0
+        assert by_start["08:30"].actual_volume is None
+
+    def test_lob_filter_scopes_reconciliation(self):
+        """lob_filter scopes inputs; out-of-scope LOBs do not cause a mismatch."""
+        tmp = tempfile.mkdtemp()
+        fc_rows = [
+            self._row("2026-09-01", lob="inbound"),
+            self._row("2026-09-01", lob="sales"),
+        ]
+        ac_rows = [
+            self._row(
+                "2026-09-01",
+                lob="inbound",
+                extra={"actual_volume": 110.0, "actual_aht_seconds": 180.0},
+            ),
+        ]
+        fcp, acp, _ = self._write_pair(tmp, fc_rows, ac_rows)
+        result = analyze(fcp, acp, lob_filter="inbound")
+        assert all(iv.lob == "inbound" for iv in result.intervals)
+        assert len(result.intervals) == 1
+
+    def test_staffing_filters_to_same_scope(self):
+        """feeding staffing with only the selected date filters to the same scope."""
+        tmp = tempfile.mkdtemp()
+        fc_rows = [self._row("2026-09-01"), self._row("2026-09-02")]
+        ac_rows = [
+            self._row("2026-09-01", extra={"actual_volume": 110.0, "actual_aht_seconds": 180.0})
+        ]
+        sd_rows = [
+            {
+                "date": "2026-09-01",
+                "lob": "inbound",
+                "interval_start": "08:00",
+                "channel": "voice",
+                "scheduled_fte": 10.0,
+            },
+            {
+                "date": "2026-09-02",
+                "lob": "inbound",
+                "interval_start": "08:00",
+                "channel": "voice",
+                "scheduled_fte": 20.0,
+            },
+        ]
+        fcp, acp, sdp = self._write_pair(tmp, fc_rows, ac_rows, sd_rows)
+        result = analyze(fcp, acp, sdp, date_filter="2026-09-01")
+        # Only day1 intervals; staffing scoped to day1 (08:00 scheduled=10.0).
+        assert all(iv.date == "2026-09-01" for iv in result.intervals)
+        assert len(result.intervals) == 1
+        assert result.intervals[0].scheduled_fte == 10.0
