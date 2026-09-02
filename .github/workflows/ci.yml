@@ -74,7 +74,7 @@ jobs:
           # Forecast spine with 10 intervals; actuals only cover 8 completed.
           fc = pd.DataFrame({
               "date": ["2026-09-01"]*10, "lob": ["inbound"]*10,
-              "interval_start": [f"08:{i*30:02d}" for i in range(10)],
+              "interval_start": [f"{(8 * 60 + i * 30) // 60:02d}:{(8 * 60 + i * 30) % 60:02d}" for i in range(10)],
               "channel": ["voice"]*10,
               "forecast_volume": [100.0]*10, "forecast_aht_seconds": [180.0]*10,
           })
