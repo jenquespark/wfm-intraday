@@ -289,3 +289,135 @@ class TestShrinkageBoundary:
     def test_shrinkage_negative_rejected(self):
         with pytest.raises(ValueError):
             Config.from_dict({"shrinkage_pct": -0.1})
+
+
+class TestUnknownConfigKey:
+    def test_unknown_config_key_hard_fails(self):
+        from wfm_intraday.config import Config
+
+        with pytest.raises(ValueError, match="Unknown config key"):
+            Config.from_dict({"totally_unknown_setting": 42})
+
+    def test_misspelled_known_key_hard_fails(self):
+        from wfm_intraday.config import Config
+
+        # Misspelled known keys are not silently accepted.
+        with pytest.raises(ValueError, match="Unknown config key"):
+            Config.from_dict({"shrinnkage_pct": 0.3})
+
+
+class TestUnknownChannelHardFail:
+    def test_unknown_channel_via_validate(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        try:
+            fc_path = os.path.join(tmp, "fc.csv")
+            ac_path = os.path.join(tmp, "ac.csv")
+            bad = pd.DataFrame(
+                {
+                    "date": ["2026-09-01"],
+                    "lob": ["inbound"],
+                    "interval_start": ["08:00"],
+                    "channel": ["fax"],
+                    "forecast_volume": [100.0],
+                    "forecast_aht_seconds": [180.0],
+                }
+            )
+            good = pd.DataFrame(
+                {
+                    "date": ["2026-09-01"],
+                    "lob": ["inbound"],
+                    "interval_start": ["08:00"],
+                    "channel": ["voice"],
+                    "actual_volume": [110.0],
+                    "actual_aht_seconds": [180.0],
+                }
+            )
+            _write(fc_path, bad)
+            _write(ac_path, good)
+            with pytest.raises(ValueError, match="unsupported channel"):
+                validate_input_files(fc_path, ac_path)
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_async_channel_via_validate(self):
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        try:
+            fc_path = os.path.join(tmp, "fc.csv")
+            ac_path = os.path.join(tmp, "ac.csv")
+            bad = pd.DataFrame(
+                {
+                    "date": ["2026-09-01"],
+                    "lob": ["inbound"],
+                    "interval_start": ["08:00"],
+                    "channel": ["async"],
+                    "forecast_volume": [100.0],
+                    "forecast_aht_seconds": [180.0],
+                }
+            )
+            good = pd.DataFrame(
+                {
+                    "date": ["2026-09-01"],
+                    "lob": ["inbound"],
+                    "interval_start": ["08:00"],
+                    "channel": ["voice"],
+                    "actual_volume": [110.0],
+                    "actual_aht_seconds": [180.0],
+                }
+            )
+            _write(fc_path, bad)
+            _write(ac_path, good)
+            with pytest.raises(ValueError, match="unsupported channel"):
+                validate_input_files(fc_path, ac_path)
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestColumnMappingDirection:
+    def test_canonical_to_source_mapping_applied(self):
+        """GenericCSVAdapter maps canonical->source in the config format."""
+        from wfm_intraday.adapters.generic_csv import GenericCSVAdapter
+
+        tmp = tempfile.mkdtemp()
+        try:
+            # Source CSV uses vendor column names.
+            src = pd.DataFrame(
+                {
+                    "Contact Date": ["2026-09-01"],
+                    "Queue Name": ["inbound"],
+                    "Time Slot": ["08:00"],
+                    "Channel": ["voice"],
+                    "Calls Forecast": [100.0],
+                    "AHT": [180.0],
+                }
+            )
+            path = os.path.join(tmp, "vendor.csv")
+            src.to_csv(path, index=False)
+
+            # Mapping in canonical->source format.
+            mapping = {
+                "forecast": {
+                    "date": "Contact Date",
+                    "lob": "Queue Name",
+                    "interval_start": "Time Slot",
+                    "channel": "Channel",
+                    "forecast_volume": "Calls Forecast",
+                    "forecast_aht_seconds": "AHT",
+                }
+            }
+            adapter = GenericCSVAdapter(mapping)
+            df = adapter.load_forecast(path)
+            assert "forecast_volume" in df.columns, "canonical column missing"
+            assert "Calls Forecast" not in df.columns, "source column remains"
+            assert df["forecast_volume"].iloc[0] == 100.0
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)

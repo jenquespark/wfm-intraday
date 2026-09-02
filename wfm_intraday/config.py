@@ -183,20 +183,26 @@ class Config:
     def from_dict(cls, d: dict[str, Any]) -> Config:
         """Create Config from a dictionary (e.g. parsed YAML).
 
-        Unknown keys are silently ignored, but KNOWN keys that are misspelled
-        are NOT silently ignored — they are rejected in ``validate()``.
+        Unknown keys cause a hard failure.  This prevents silent misspellings
+        from changing staffing outputs without any indication.
         """
-        # Build dict of known fields, converting channels dict if present
         known_keys = set(cls.__dataclass_fields__.keys())
+        aliases = cls._legacy_aliases()
+
+        unknown_keys = [k for k in d if k not in known_keys and k not in aliases]
+        if unknown_keys:
+            raise ValueError(
+                f"Unknown config key(s): {sorted(unknown_keys)}. "
+                f"Valid keys: {sorted(known_keys)}. "
+                f"Legacy aliases: {sorted(aliases.keys())}."
+            )
 
         filtered: dict[str, Any] = {}
         for k, v in d.items():
             if k in known_keys:
                 filtered[k] = v
-            elif k in cls._legacy_aliases():
-                filtered[cls._legacy_aliases()[k]] = v
-            else:
-                logger.debug("Ignoring unknown config key '%s'", k)
+            elif k in aliases:
+                filtered[aliases[k]] = v
 
         # Convert channels dict to typed ChannelConfig objects
         if "channels" in filtered and isinstance(filtered["channels"], dict):

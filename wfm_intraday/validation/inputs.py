@@ -49,13 +49,41 @@ def validate_input_files(
     warnings: list[str] = []
     mapping = column_mapping or {}
 
-    forecast_df = _load_and_validate(forecast_path, FORECAST_COLUMNS, "forecast", mapping)
-    actuals_df = _load_and_validate(actuals_path, ACTUALS_COLUMNS, "actuals", mapping)
-    staffing_df = None
-    if staffing_path:
-        staffing_df = _load_and_validate(staffing_path, SCHEDULE_COLUMNS, "staffing", mapping)
+    # When a column mapping is supplied, load through the GenericCSVAdapter so
+    # the canonical→source direction is handled in ONE place (the adapter).
+    if mapping:
+        from wfm_intraday.adapters.generic_csv import GenericCSVAdapter
+
+        # Normalize flat mapping into per-source-type mapping.
+        per_source: dict[str, dict[str, str]] = {}
+        for canonical, source in mapping.items():
+            per_source.setdefault(_source_type_for(canonical), {})[canonical] = source
+        adapter = GenericCSVAdapter(per_source)
+
+        forecast_df = adapter.load_forecast(forecast_path)
+        actuals_df = adapter.load_actuals(actuals_path)
+        staffing_df = None
+        if staffing_path:
+            staffing_df = adapter.load_staffing(staffing_path)
+    else:
+        forecast_df = _load_and_validate(forecast_path, FORECAST_COLUMNS, "forecast", {})
+        actuals_df = _load_and_validate(actuals_path, ACTUALS_COLUMNS, "actuals", {})
+        staffing_df = None
+        if staffing_path:
+            staffing_df = _load_and_validate(staffing_path, SCHEDULE_COLUMNS, "staffing", {})
 
     return forecast_df, actuals_df, staffing_df, warnings
+
+
+def _source_type_for(canonical: str) -> str:
+    """Return the source file type a canonical column belongs to."""
+    if canonical in FORECAST_COLUMNS:
+        return "forecast"
+    if canonical in ACTUALS_COLUMNS:
+        return "actuals"
+    if canonical in SCHEDULE_COLUMNS:
+        return "staffing"
+    return "forecast"  # key columns default to forecast
 
 
 def _load_and_validate(
@@ -110,6 +138,18 @@ def _load_and_validate(
                     f"{label}: column '{col}' has {neg} negative values. "
                     f"Negative volume, AHT, or FTE is invalid operational data."
                 )
+
+    # Unknown channel values are HARD errors (no silent voice fallback).
+    if "channel" in df.columns:
+        from wfm_intraday.config import SUPPORTED_CHANNELS
+
+        bad_channels = set(df["channel"].dropna().unique()) - SUPPORTED_CHANNELS
+        if bad_channels:
+            raise ValueError(
+                f"{label}: unsupported channel(s) {sorted(bad_channels)}. "
+                f"Supported channels: {sorted(SUPPORTED_CHANNELS)}. "
+                f"Async/back-office is not supported."
+            )
 
     return df
 

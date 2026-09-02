@@ -62,11 +62,18 @@ class GenericCSVAdapter(InputAdapter):
         return True
 
     def _map_columns(self, df: pd.DataFrame, source_type: str, expected: set) -> pd.DataFrame:
-        """Rename columns according to mapping, then validate canonical names."""
+        """Rename columns according to mapping, then validate canonical names.
+
+        The user-facing config format is canonical→source (e.g.
+        ``{"date": "Contact Date"}`).  We reverse it to source→canonical
+        before applying ``df.rename``.
+        """
         mapping = self._mapping.get(source_type, {})
         if mapping:
-            df = df.rename(columns=mapping)
-            logger.debug("Applied column mapping for %s: %s", source_type, mapping)
+            # User provides canonical→source; rename needs source→canonical.
+            reversed_map = {v: k for k, v in mapping.items()}
+            df = df.rename(columns=reversed_map)
+            logger.debug("Applied column mapping for %s: %s", source_type, reversed_map)
         # Check which canonical columns are present
         missing = expected - set(df.columns)
         if missing:
