@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-import os
-from typing import Optional
-
 import pandas as pd
 
 from wfm_intraday.domain.models import (
@@ -17,8 +13,6 @@ from wfm_intraday.domain.models import (
     validate_columns,
 )
 
-logger = logging.getLogger(__name__)
-
 # The canonical join/identity keys shared by every input file.
 KEY_COLUMNS: list[str] = BASE_KEY_COLUMNS
 
@@ -29,7 +23,13 @@ def validate_input_files(
     staffing_path: str | None = None,
     column_mapping: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None, list[str]]:
-    """Load and validate input CSV files.
+    """Load and validate input CSV files through the single adapter pipeline.
+
+    Loading ALWAYS goes through :class:`GenericCSVAdapter` — with or without a
+    ``column_mapping`` — so CLI, API, and web all share one code path.  When no
+    mapping is given, the adapter expects canonical column names directly and
+    still runs the same hard-fail validations (duplicate keys, negative
+    values, unsupported channels).
 
     Args:
         forecast_path: Path to forecast CSV.
@@ -47,32 +47,44 @@ def validate_input_files(
             duplicate keys are present, or other structural issues exist.
     """
     warnings: list[str] = []
-    mapping = column_mapping or {}
+    from wfm_intraday.adapters.generic_csv import GenericCSVAdapter
 
-    # When a column mapping is supplied, load through the GenericCSVAdapter so
-    # the canonical→source direction is handled in ONE place (the adapter).
-    if mapping:
-        from wfm_intraday.adapters.generic_csv import GenericCSVAdapter
-
-        # Normalize flat mapping into per-source-type mapping.
-        per_source: dict[str, dict[str, str]] = {}
-        for canonical, source in mapping.items():
+    # Normalize the flat mapping into per-source-type mapping (canonical→source).
+    # Key columns (date, lob, interval_start, channel) apply to EVERY source
+    # file, not just forecast.
+    key_canonical = set(BASE_KEY_COLUMNS)
+    per_source: dict[str, dict[str, str]] = {}
+    for canonical, source in (column_mapping or {}).items():
+        if canonical in key_canonical:
+            for src in ("forecast", "actuals", "staffing"):
+                per_source.setdefault(src, {})[canonical] = source
+        else:
             per_source.setdefault(_source_type_for(canonical), {})[canonical] = source
-        adapter = GenericCSVAdapter(per_source)
+    adapter = GenericCSVAdapter(per_source)
 
-        forecast_df = adapter.load_forecast(forecast_path)
-        actuals_df = adapter.load_actuals(actuals_path)
-        staffing_df = None
-        if staffing_path:
-            staffing_df = adapter.load_staffing(staffing_path)
-    else:
-        forecast_df = _load_and_validate(forecast_path, FORECAST_COLUMNS, "forecast", {})
-        actuals_df = _load_and_validate(actuals_path, ACTUALS_COLUMNS, "actuals", {})
-        staffing_df = None
-        if staffing_path:
-            staffing_df = _load_and_validate(staffing_path, SCHEDULE_COLUMNS, "staffing", {})
+    forecast_df = _load_through_adapter(adapter, "forecast", forecast_path)
+    actuals_df = _load_through_adapter(adapter, "actuals", actuals_path)
+    staffing_df = None
+    if staffing_path:
+        staffing_df = _load_through_adapter(adapter, "staffing", staffing_path)
 
     return forecast_df, actuals_df, staffing_df, warnings
+
+
+def _load_through_adapter(adapter, source_type: str, path: str) -> pd.DataFrame:
+    """Load through the adapter, then run hard-fail validation.
+
+    The adapter maps source→canonical columns; the validation pass then
+    enforces duplicates/negatives/unknown-channels on the canonical frame.
+    """
+    loader = getattr(adapter, f"load_{source_type}")
+    df = loader(path)
+    expected = {
+        "forecast": FORECAST_COLUMNS,
+        "actuals": ACTUALS_COLUMNS,
+        "staffing": SCHEDULE_COLUMNS,
+    }[source_type]
+    return _validate_canonical(df, expected, source_type)
 
 
 def _source_type_for(canonical: str) -> str:
@@ -86,27 +98,19 @@ def _source_type_for(canonical: str) -> str:
     return "forecast"  # key columns default to forecast
 
 
-def _load_and_validate(
-    path: str,
+def _validate_canonical(
+    df: pd.DataFrame,
     expected_cols: list[str],
     label: str,
-    column_mapping: dict[str, str],
 ) -> pd.DataFrame:
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"{label} file not found: {path}")
+    """Validate a canonical-schema frame with hard-fail checks.
 
-    df = pd.read_csv(path)
+    Assumes the frame is already loaded and column-mapped (by the adapter).
+    Enforces required columns, duplicate keys, negative values, and supported
+    channels — all hard errors.
+    """
 
-    # Apply column mapping if provided
-    if column_mapping:
-        reversed_map: dict[str, str] = {}
-        for canonical, source in column_mapping.items():
-            if source in reversed_map:
-                raise ValueError(f"{label}: duplicate source column '{source}' in column mapping")
-            reversed_map[source] = canonical
-        df = df.rename(columns=reversed_map)
-
-    # Validate required canonical columns exist
+    # Validate required canonical columns exist.
     try:
         validate_columns(expected_cols, list(df.columns))
     except ValueError as e:

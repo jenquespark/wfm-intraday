@@ -421,3 +421,141 @@ class TestColumnMappingDirection:
             import shutil
 
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestUnifiedAdapterPipeline:
+    def test_canonical_input_and_mapped_input_both_work(self):
+        """CLI/API/web share one adapter pipeline; canonical and mapped both pass."""
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        try:
+            # Canonical CSV (no mapping needed).
+            fc_canon = os.path.join(tmp, "fc_canon.csv")
+            ac_canon = os.path.join(tmp, "ac_canon.csv")
+            _write(
+                fc_canon,
+                pd.DataFrame(
+                    {
+                        "date": ["2026-09-01"],
+                        "lob": ["inbound"],
+                        "interval_start": ["08:00"],
+                        "channel": ["voice"],
+                        "forecast_volume": [100.0],
+                        "forecast_aht_seconds": [180.0],
+                    }
+                ),
+            )
+            _write(
+                ac_canon,
+                pd.DataFrame(
+                    {
+                        "date": ["2026-09-01"],
+                        "lob": ["inbound"],
+                        "interval_start": ["08:00"],
+                        "channel": ["voice"],
+                        "actual_volume": [110.0],
+                        "actual_aht_seconds": [180.0],
+                    }
+                ),
+            )
+            # Mapped (vendor) CSV.
+            fc_map = os.path.join(tmp, "fc_map.csv")
+            ac_map = os.path.join(tmp, "ac_map.csv")
+            _write(
+                fc_map,
+                pd.DataFrame(
+                    {
+                        "Contact Date": ["2026-09-01"],
+                        "Queue": ["inbound"],
+                        "Slot": ["08:00"],
+                        "Chan": ["voice"],
+                        "FCast": [100.0],
+                        "AHT_f": [180.0],
+                    }
+                ),
+            )
+            _write(
+                ac_map,
+                pd.DataFrame(
+                    {
+                        "Contact Date": ["2026-09-01"],
+                        "Queue": ["inbound"],
+                        "Slot": ["08:00"],
+                        "Chan": ["voice"],
+                        "Actual": [110.0],
+                        "AHT_a": [180.0],
+                    }
+                ),
+            )
+            flat_map = {
+                "date": "Contact Date",
+                "lob": "Queue",
+                "interval_start": "Slot",
+                "channel": "Chan",
+                "forecast_volume": "FCast",
+                "forecast_aht_seconds": "AHT_f",
+                "actual_volume": "Actual",
+                "actual_aht_seconds": "AHT_a",
+            }
+
+            # Both must load without error.
+            fcn, acn, _, _ = validate_input_files(fc_canon, ac_canon)
+            fcm, acm, _, _ = validate_input_files(fc_map, ac_map, column_mapping=flat_map)
+
+            assert list(fcn.columns) == list(fcm.columns)
+            assert fcn["forecast_volume"].iloc[0] == fcm["forecast_volume"].iloc[0] == 100.0
+            assert acn["actual_volume"].iloc[0] == acm["actual_volume"].iloc[0] == 110.0
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_mapped_input_still_hard_fails_unknown_channel(self):
+        """Even with a mapping, unknown channels are rejected."""
+        from wfm_intraday.validation.inputs import validate_input_files
+
+        tmp = tempfile.mkdtemp()
+        try:
+            fc_path = os.path.join(tmp, "fc.csv")
+            ac_path = os.path.join(tmp, "ac.csv")
+            _write(
+                fc_path,
+                pd.DataFrame(
+                    {
+                        "Contact Date": ["2026-09-01"],
+                        "Queue": ["inbound"],
+                        "Slot": ["08:00"],
+                        "Chan": ["fax"],
+                        "FCast": [100.0],
+                        "AHT_f": [180.0],
+                    }
+                ),
+            )
+            _write(
+                ac_path,
+                pd.DataFrame(
+                    {
+                        "date": ["2026-09-01"],
+                        "lob": ["inbound"],
+                        "interval_start": ["08:00"],
+                        "channel": ["voice"],
+                        "actual_volume": [110.0],
+                        "actual_aht_seconds": [180.0],
+                    }
+                ),
+            )
+            flat_map = {
+                "date": "Contact Date",
+                "lob": "Queue",
+                "interval_start": "Slot",
+                "channel": "Chan",
+                "forecast_volume": "FCast",
+                "forecast_aht_seconds": "AHT_f",
+            }
+            with pytest.raises(ValueError, match="unsupported channel"):
+                validate_input_files(fc_path, ac_path, column_mapping=flat_map)
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
