@@ -183,17 +183,22 @@ def calculate_redistribution(
 
         # In as-of mode, only FUTURE intervals are eligible recipients, and
         # only FUTURE intervals may act as donors (past capacity is spent).
+        # "Future" uses the SAME key/time predicate as the rest of the
+        # pipeline: an interval is completed iff its END time
+        # (interval_start + interval_length) <= checkpoint.  A non-completed
+        # (future) interval has END > checkpoint.  This keeps redistribution
+        # consistent with reforecast / IntervalRecord / StaffingGap /
+        # accuracy and independent of input row order.
         if mode == "as-of" and checkpoint_minutes is not None:
-            understaffed = [
-                g
-                for g in understaffed
-                if _parse_interval_index(g.interval_start) >= checkpoint_minutes
-            ]
-            overstaffed = [
-                g
-                for g in overstaffed
-                if _parse_interval_index(g.interval_start) >= checkpoint_minutes
-            ]
+
+            def _is_future(g) -> bool:
+                return (
+                    _parse_interval_index(g.interval_start) + config.interval_length_minutes
+                    > checkpoint_minutes
+                )
+
+            understaffed = [g for g in understaffed if _is_future(g)]
+            overstaffed = [g for g in overstaffed if _is_future(g)]
 
         donor_remaining: dict[str, float] = {}
         for o in overstaffed:

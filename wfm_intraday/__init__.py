@@ -165,14 +165,16 @@ def analyze(
             }
         )
 
-    # ── 6. Build a key/time completion frame ──────────────────────────
-    completed_mask = _build_completed_mask(merged_df, config, mode, checkpoint_minutes)
-
+    # ── 6. Completion is KEY/TIME based, computed per interval from the
+    #       interval start time + config.  There is NO positional mask:
+    #       the same predicate is applied to every consumer so the result
+    #       is independent of input row order.
+    #
     # ── 7. Compute forecast accuracy (as-of scoped to completed) ──────
-    forecast_accuracy = _compute_forecast_accuracy(merged_df, mode, completed_mask)
+    forecast_accuracy = _compute_forecast_accuracy(merged_df, config, mode, checkpoint_minutes)
 
-    # ── 8. Compute reforecast (masked to completed actuals only) ──────
-    reforecast_results = _compute_reforecast(merged_df, config, mode, completed_mask)
+    # ── 8. Compute reforecast (completed actuals only) ───────────────
+    reforecast_results = _compute_reforecast(merged_df, config, mode, checkpoint_minutes)
 
     # ── 9. Build interval records (full forecast spine) ───────────────
     intervals = _build_intervals(
@@ -180,8 +182,8 @@ def analyze(
         config,
         reforecast_results,
         sd_df,
-        completed_mask=completed_mask,
         mode=mode,
+        checkpoint_minutes=checkpoint_minutes,
     )
 
     # ── 10. Compute staffing gaps ──────────────────────────────────────
@@ -190,8 +192,8 @@ def analyze(
         config,
         reforecast_results,
         sd_df,
-        completed_mask=completed_mask,
         mode=mode,
+        checkpoint_minutes=checkpoint_minutes,
     )
 
     # ── 11. Redistribution (uses canonical gaps) ───────────────────────
@@ -264,33 +266,32 @@ def _interval_end_minutes(interval_start: str, config: Config) -> int:
     return start + config.interval_length_minutes
 
 
-def _build_completed_mask(
-    merged_df: pd.DataFrame,
+def _is_completed(
+    interval_start: str,
     config: Config,
     mode: str,
     checkpoint_minutes: int | None,
-) -> pd.Series | None:
-    """Return a boolean Series (aligned to merged_df) where True == completed.
+) -> bool:
+    """Key/time completion predicate.
 
-    Completion is key/time based: an interval is *completed* iff its end time
-    is <= the checkpoint clock time.  In retrospective mode every row is
-    considered completed (or, if actuals are missing for that key, completed
-    with an unknown/NaN actual — which downstream treats as zero requirement
-    only when the value is genuinely missing, not zero).
+    An interval is *completed* iff its END time (interval_start +
+    interval_length) is <= the checkpoint clock time.  This is a pure
+    function of the interval's canonical key and the checkpoint — there is
+    NO positional or modulo masking, so the answer is independent of input
+    row order.
 
-    Returns None for retrospective mode (everything completed).
+    In retrospective mode (no checkpoint) every interval is completed.
     """
     if mode != "as-of" or checkpoint_minutes is None:
-        return None
-
-    end_minutes = merged_df["interval_start"].apply(lambda s: _interval_end_minutes(str(s), config))
-    return end_minutes <= checkpoint_minutes
+        return True
+    return _interval_end_minutes(str(interval_start), config) <= checkpoint_minutes
 
 
 def _compute_forecast_accuracy(
     merged_df: pd.DataFrame,
+    config: Config,
     mode: str,
-    completed_mask: pd.Series | None,
+    checkpoint_minutes: int | None,
 ) -> dict[str, Any]:
     """Compute forecast accuracy, scoped to completed intervals in as-of mode.
 
@@ -301,8 +302,12 @@ def _compute_forecast_accuracy(
     # Drop rows where actual volume is genuinely missing.
     df = df[df["actual_volume"].notna()]
 
-    if mode == "as-of" and completed_mask is not None:
-        df = df.loc[completed_mask.reindex(df.index)]
+    if mode == "as-of":
+        # Keep only completed intervals (key/time based, order-independent).
+        completed = df["interval_start"].map(
+            lambda s: _is_completed(str(s), config, mode, checkpoint_minutes)
+        )
+        df = df[completed.to_numpy(dtype=bool)]
 
     if df.empty:
         return {"per_lob": {}, "overall": {"wape": 0.0, "mape": 0.0, "bias": 0.0}}
@@ -329,26 +334,26 @@ def _compute_reforecast(
     merged_df: pd.DataFrame,
     config: Config,
     mode: str,
-    completed_mask: pd.Series | None,
+    checkpoint_minutes: int | None,
 ) -> list[ReforecastResult]:
     """Compute reforecast per (date, lob, channel) using completed actuals.
 
-    In as-of mode, only actuals from completed intervals influence the scale
-    factor.  Future actuals are ignored even if present in the input (key/time
-    based, never positional/modulo).  In retrospective mode there is no
-    checkpoint: the full-day total is used and no scaling of future intervals
-    is meaningful, so we return an empty list (nothing to reforecast).
+    In as-of mode, only actuals from COMPLETED intervals influence the scale
+    factor.  Completion is key/time based (per-interval from its interval
+    start + config), never positional/modulo — so input row order does not
+    matter.  Future actuals are ignored even if present in the input.  In
+    retrospective mode there is no checkpoint: no scaling is meaningful, so
+    we return an empty list.
     """
     if mode == "retrospective":
         return []
 
-    if completed_mask is None:
-        return []
-
-    # Build a mask of usable actuals: completed AND actual volume present.
-    usable = completed_mask & merged_df["actual_volume"].notna()
+    # Per-interval completion (key/time).  usable = completed AND has actual.
     df = merged_df.copy()
-    df["_usable"] = usable.to_numpy()
+    df["_completed_t"] = df["interval_start"].map(
+        lambda s: _is_completed(str(s), config, mode, checkpoint_minutes)
+    )
+    df["_usable"] = (df["_completed_t"]) & (df["actual_volume"].notna())
 
     results: list[ReforecastResult] = []
     for (date, lob, channel), group in df.groupby(["date", "lob", "channel"]):
@@ -427,24 +432,20 @@ def _build_intervals(
     merged_df: pd.DataFrame,
     config: Config,
     reforecast_results: list[ReforecastResult],
-    schedule_df: pd.DataFrame | None,
-    completed_mask: pd.Series | None,
-    mode: str,
+    sd_df: pd.DataFrame | None,
+    mode: str = "retrospective",
+    checkpoint_minutes: int | None = None,
 ) -> list[IntervalRecord]:
     """Build fully-populated interval records (full forecast spine)."""
     from wfm_intraday.calculator import _channel_from_row, _compute_staffing_req
 
     interval_seconds = config.interval_length_minutes * 60
     reforecast_lookup = _build_reforecast_lookup(reforecast_results)
-    schedule_lookup = _build_schedule_lookup(schedule_df)
+    schedule_lookup = _build_schedule_lookup(sd_df)
 
     merged_df = merged_df.sort_values(["date", "lob", "channel", "interval_start"]).reset_index(
         drop=True
     )
-
-    # Realign completed mask to the sorted frame (key/time based).
-    if completed_mask is not None:
-        completed_mask = completed_mask.reindex(merged_df.index)
 
     intervals: list[IntervalRecord] = []
     group_counts: dict[tuple[str, str, str], int] = {}
@@ -476,10 +477,8 @@ def _build_intervals(
         else:
             actual_aht = float(raw_aht)
 
-        # Completion status (key/time based; retrospective => all completed).
-        is_completed = True
-        if mode == "as-of" and completed_mask is not None:
-            is_completed = bool(completed_mask.iloc[i])
+        # Completion status: key/time based (independent of input row order).
+        is_completed = _is_completed(int_start, config, mode, checkpoint_minutes)
 
         # In as-of mode, future intervals have their actuals suppressed (None),
         # independent of whether the input file happened to contain future rows.
@@ -549,28 +548,28 @@ def _compute_staffing_gaps(
     merged_df: pd.DataFrame,
     config: Config,
     reforecast_results: list[ReforecastResult],
-    schedule_df: pd.DataFrame | None,
-    completed_mask: pd.Series | None,
-    mode: str,
+    sd_df: pd.DataFrame | None,
+    mode: str = "retrospective",
+    checkpoint_minutes: int | None = None,
 ) -> list[StaffingGap]:
     """Compute StaffingGap objects with proper future-interval handling.
 
     Zero scheduled FTE is a REAL scheduled zero (status computed against the
     gap), NOT "no_schedule".  "no_schedule" is reserved for intervals with no
     schedule row at all.
+
+    Completion is key/time based (per interval from its interval start +
+    config), independent of input row order.  No positional mask is used.
     """
     from wfm_intraday.calculator import _channel_from_row, _compute_staffing_req
 
     interval_seconds = config.interval_length_minutes * 60
-    schedule_lookup = _build_schedule_lookup(schedule_df)
+    schedule_lookup = _build_schedule_lookup(sd_df)
     reforecast_lookup = _build_reforecast_lookup(reforecast_results)
 
     merged_df = merged_df.sort_values(["date", "lob", "channel", "interval_start"]).reset_index(
         drop=True
     )
-
-    if completed_mask is not None:
-        completed_mask = completed_mask.reindex(merged_df.index)
 
     gaps: list[StaffingGap] = []
     group_counts: dict[tuple[str, str, str], int] = {}
@@ -593,9 +592,7 @@ def _compute_staffing_gaps(
         raw_aht = row.get("actual_aht_seconds")
         actual_aht = None if pd.isna(raw_aht) else float(raw_aht)
 
-        is_completed = True
-        if mode == "as-of" and completed_mask is not None:
-            is_completed = bool(completed_mask.iloc[i])
+        is_completed = _is_completed(int_start, config, mode, checkpoint_minutes)
 
         if mode == "as-of" and not is_completed:
             actual_vol = None

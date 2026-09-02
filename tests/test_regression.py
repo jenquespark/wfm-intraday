@@ -559,3 +559,323 @@ class TestUnifiedAdapterPipeline:
             import shutil
 
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestPositionalMaskElimination:
+    """Regression: positional completed_mask Series caused row-order bugs.
+
+    Previously _build_completed_mask returned a boolean Series aligned to the
+    merged DataFrame's positional index.  When inputs were unsorted the mask
+    was applied to wrong rows after sort_values+reset_index, causing:
+    - future actuals leaking into completed rows
+    - completed actuals appearing as None in future rows
+
+    Fix: completion is now computed per-interval via _is_completed() from
+    the interval's canonical start time + config.  No positional mask exists.
+    """
+
+    def _write(self, tmp, name, df):
+        import os
+
+        p = os.path.join(tmp, name)
+        df.to_csv(p, index=False)
+        return p
+
+    def test_unsorted_as_of_completion_is_correct(self):
+        """Reviewer-reported bug: reversed row order with checkpoint=08:30.
+
+        fc order: 09:00, 08:00  (reversed)
+        ac order: 09:00, 08:00  (reversed)
+        checkpoint: 08:30
+        Expected: 08:00 completed (actual=100, required=21.21),
+                  09:00 future    (actual=None, required=None)
+        """
+        import tempfile
+
+        from wfm_intraday import analyze
+
+        tmp = tempfile.mkdtemp()
+        fc = pd.DataFrame(
+            {
+                "date": ["2026-09-01", "2026-09-01"],
+                "lob": ["inbound", "inbound"],
+                "interval_start": ["09:00", "08:00"],  # reversed
+                "channel": ["voice", "voice"],
+                "forecast_volume": [100.0, 100.0],
+                "forecast_aht_seconds": [180.0, 180.0],
+            }
+        )
+        ac = pd.DataFrame(
+            {
+                "date": ["2026-09-01", "2026-09-01"],
+                "lob": ["inbound", "inbound"],
+                "interval_start": ["09:00", "08:00"],  # reversed
+                "channel": ["voice", "voice"],
+                "actual_volume": [100.0, 100.0],
+                "actual_aht_seconds": [180.0, 180.0],
+            }
+        )
+        fcp = self._write(tmp, "fc.csv", fc)
+        acp = self._write(tmp, "ac.csv", ac)
+        result = analyze(fcp, acp, mode="as-of", checkpoint="08:30")
+
+        by_start = {iv.interval_start: iv for iv in result.intervals}
+        # 08:00 is completed (end=08:30 <= checkpoint=08:30)
+        assert by_start["08:00"].actual_volume == 100.0
+        assert by_start["08:00"].actual_required_gross_fte is not None
+        assert by_start["08:00"].actual_required_gross_fte > 0
+        # 09:00 is future (end=09:30 > checkpoint=08:30)
+        assert by_start["09:00"].actual_volume is None
+        assert by_start["09:00"].actual_required_gross_fte is None
+
+    def test_as_of_result_is_order_invariant(self):
+        """Shuffle both forecast and actuals; the output must be identical."""
+        import tempfile
+
+        import numpy as np
+
+        from wfm_intraday import analyze
+
+        tmp = tempfile.mkdtemp()
+        # Canonical order (sorted)
+        fc_sorted = pd.DataFrame(
+            {
+                "date": ["2026-09-01"] * 4,
+                "lob": ["inbound"] * 4,
+                "interval_start": ["08:00", "08:30", "09:00", "09:30"],
+                "channel": ["voice"] * 4,
+                "forecast_volume": [100.0, 100.0, 100.0, 100.0],
+                "forecast_aht_seconds": [180.0, 180.0, 180.0, 180.0],
+            }
+        )
+        ac_sorted = pd.DataFrame(
+            {
+                "date": ["2026-09-01"] * 4,
+                "lob": ["inbound"] * 4,
+                "interval_start": ["08:00", "08:30", "09:00", "09:30"],
+                "channel": ["voice"] * 4,
+                "actual_volume": [110.0, 90.0, 120.0, 80.0],
+                "actual_aht_seconds": [180.0] * 4,
+            }
+        )
+        # Shuffled order (deterministic via seed)
+        rng = np.random.RandomState(42)
+        fc_shuffled = fc_sorted.iloc[rng.permutation(len(fc_sorted))].reset_index(drop=True)
+        ac_shuffled = ac_sorted.iloc[rng.permutation(len(ac_sorted))].reset_index(drop=True)
+
+        fcs = self._write(tmp, "fc_sorted.csv", fc_sorted)
+        acs = self._write(tmp, "ac_sorted.csv", ac_sorted)
+        fcu = self._write(tmp, "fc_unsorted.csv", fc_shuffled)
+        acu = self._write(tmp, "ac_unsorted.csv", ac_shuffled)
+
+        r_sorted = analyze(fcs, acs, mode="as-of", checkpoint="08:30")
+        r_unsorted = analyze(fcu, acu, mode="as-of", checkpoint="08:30")
+
+        # Compare by interval_start (order-independent)
+        by_start_s = {iv.interval_start: iv for iv in r_sorted.intervals}
+        by_start_u = {iv.interval_start: iv for iv in r_unsorted.intervals}
+        assert set(by_start_s.keys()) == set(by_start_u.keys())
+        for k, s in by_start_s.items():
+            u = by_start_u[k]
+            assert s.actual_volume == u.actual_volume, f"{k}: actual_volume differs"
+            assert s.forecast_volume == u.forecast_volume, f"{k}: forecast_volume differs"
+            if s.actual_required_gross_fte is not None:
+                assert u.actual_required_gross_fte is not None
+                assert abs(s.actual_required_gross_fte - u.actual_required_gross_fte) < 1e-6, (
+                    f"{k}: actual_required_gross_fte differs"
+                )
+            else:
+                assert u.actual_required_gross_fte is None, f"{k}: expected None"
+
+        # Reforecast must also match
+        assert len(r_sorted.reforecast_results) == len(r_unsorted.reforecast_results)
+        if r_sorted.reforecast_results:
+            assert (
+                abs(
+                    r_sorted.reforecast_results[0].scale_factor
+                    - r_unsorted.reforecast_results[0].scale_factor
+                )
+                < 1e-9
+            )
+
+    def test_future_actuals_are_null_after_sorting(self):
+        """Future actuals must NEVER appear in output, regardless of input order.
+
+        Scenario: 4 intervals, checkpoint=09:00 (08:00 and 08:30 completed,
+        09:00 and 09:30 future).  Input actuals are REVERSED so 09:30 is the
+        FIRST actual row.  After sorting+completion, 09:00 and 09:30 must
+        have actual_volume=None and actual_required_fte=None.
+        """
+        import tempfile
+
+        from wfm_intraday import analyze
+
+        tmp = tempfile.mkdtemp()
+        fc = pd.DataFrame(
+            {
+                "date": ["2026-09-01"] * 4,
+                "lob": ["inbound"] * 4,
+                "interval_start": ["09:30", "09:00", "08:30", "08:00"],  # reversed!
+                "channel": ["voice"] * 4,
+                "forecast_volume": [100.0] * 4,
+                "forecast_aht_seconds": [180.0] * 4,
+            }
+        )
+        ac = pd.DataFrame(
+            {
+                "date": ["2026-09-01"] * 4,
+                "lob": ["inbound"] * 4,
+                "interval_start": ["09:30", "09:00", "08:30", "08:00"],  # reversed!
+                "channel": ["voice"] * 4,
+                "actual_volume": [100.0, 100.0, 100.0, 100.0],
+                "actual_aht_seconds": [180.0] * 4,
+            }
+        )
+        fcp = self._write(tmp, "fc.csv", fc)
+        acp = self._write(tmp, "ac.csv", ac)
+        # checkpoint 09:00 → end<=09:00 → 08:00 (end 08:30), 08:30 (end 09:00) are completed
+        # 09:00 (end 09:30) and 09:30 (end 10:00) are future
+        result = analyze(fcp, acp, mode="as-of", checkpoint="09:00")
+
+        by_start = {iv.interval_start: iv for iv in result.intervals}
+        # Completed intervals have real actuals
+        assert by_start["08:00"].actual_volume == 100.0
+        assert by_start["08:00"].actual_required_gross_fte is not None
+        assert by_start["08:30"].actual_volume == 100.0
+        assert by_start["08:30"].actual_required_gross_fte is not None
+        # Future intervals: actuals suppressed
+        assert by_start["09:00"].actual_volume is None
+        assert by_start["09:00"].actual_required_gross_fte is None
+        assert by_start["09:30"].actual_volume is None
+        assert by_start["09:30"].actual_required_gross_fte is None
+        # Reforecast exists and is scaled for future
+        assert len(result.reforecast_results) == 1
+        assert result.reforecast_results[0].scale_factor != 0
+
+    def test_distinct_volumes_unsorted_as_of(self):
+        """Distinguishing assert: distinct actual volumes across the boundary.
+
+        fc order: 09:00, 08:00  (reversed)
+        ac:       09:00 actual=999, 08:00 actual=200  (reversed, distinct)
+        checkpoint: 08:30
+        Expected: 08:00 actual_volume == 200 (completed)
+                  09:00 actual_volume is None (future)
+        Using DISTINCT volumes forces the value to be tied to the right
+        interval — equal values would hide a row/volume swap.
+        """
+        import tempfile
+
+        from wfm_intraday import analyze
+
+        tmp = tempfile.mkdtemp()
+        fc = pd.DataFrame(
+            {
+                "date": ["2026-09-01", "2026-09-01"],
+                "lob": ["inbound", "inbound"],
+                "interval_start": ["09:00", "08:00"],  # reversed
+                "channel": ["voice", "voice"],
+                "forecast_volume": [100.0, 100.0],
+                "forecast_aht_seconds": [180.0, 180.0],
+            }
+        )
+        ac = pd.DataFrame(
+            {
+                "date": ["2026-09-01", "2026-09-01"],
+                "lob": ["inbound", "inbound"],
+                "interval_start": ["09:00", "08:00"],  # reversed
+                "channel": ["voice", "voice"],
+                "actual_volume": [999.0, 200.0],  # distinct values
+                "actual_aht_seconds": [180.0, 180.0],
+            }
+        )
+        fcp = self._write(tmp, "fc.csv", fc)
+        acp = self._write(tmp, "ac.csv", ac)
+        result = analyze(fcp, acp, mode="as-of", checkpoint="08:30")
+
+        by_start = {iv.interval_start: iv for iv in result.intervals}
+        # 08:00 completed -> actual 200 (NOT 999)
+        assert by_start["08:00"].actual_volume == 200.0
+        assert by_start["08:00"].actual_required_gross_fte is not None
+        # 09:00 future -> actual suppressed to None (the 999 must never leak)
+        assert by_start["09:00"].actual_volume is None
+        assert by_start["09:00"].actual_required_gross_fte is None
+
+    def test_as_of_order_invariant_including_staffing(self):
+        """Shuffle forecast, actuals, AND staffing independently; outputs identical.
+
+        Scenario: 4 intervals, checkpoint=08:30 (08:00 completed,
+        08:30..09:30 future).  All three inputs are independently shuffled
+        (deterministic seeds).  Intervals, reforecast scale, staffing gaps,
+        and redistribution must be identical to the sorted-input run.
+        """
+        import tempfile
+
+        import numpy as np
+
+        from wfm_intraday import analyze
+
+        tmp = tempfile.mkdtemp()
+        starts = ["08:00", "08:30", "09:00", "09:30"]
+        fc_sorted = pd.DataFrame(
+            {
+                "date": ["2026-09-01"] * 4,
+                "lob": ["inbound"] * 4,
+                "interval_start": starts,
+                "channel": ["voice"] * 4,
+                "forecast_volume": [100.0, 100.0, 100.0, 100.0],
+                "forecast_aht_seconds": [180.0] * 4,
+            }
+        )
+        ac_sorted = pd.DataFrame(
+            {
+                "date": ["2026-09-01"] * 4,
+                "lob": ["inbound"] * 4,
+                "interval_start": starts,
+                "channel": ["voice"] * 4,
+                "actual_volume": [200.0, 80.0, 999.0, 999.0],  # distinct completed
+                "actual_aht_seconds": [180.0] * 4,
+            }
+        )
+        sd_sorted = pd.DataFrame(
+            {
+                "date": ["2026-09-01"] * 4,
+                "lob": ["inbound"] * 4,
+                "interval_start": starts,
+                "channel": ["voice"] * 4,
+                "scheduled_fte": [10.0, 20.0, 30.0, 40.0],
+            }
+        )
+
+        def _shuff(df, seed):
+            return df.iloc[np.random.RandomState(seed).permutation(len(df))].reset_index(drop=True)
+
+        runs = []
+        for seed in (1, 2, 3):
+            f = self._write(tmp, f"fc_{seed}.csv", _shuff(fc_sorted, seed))
+            a = self._write(tmp, f"ac_{seed}.csv", _shuff(ac_sorted, 100 + seed))
+            s = self._write(tmp, f"sd_{seed}.csv", _shuff(sd_sorted, 200 + seed))
+            r = analyze(f, a, s, mode="as-of", checkpoint="08:30")
+            runs.append(r)
+
+        # Reference = first run.  All runs must be identical.
+        ref = runs[0]
+        ref_by_start = {iv.interval_start: iv for iv in ref.intervals}
+        ref_scale = ref.reforecast_results[0].scale_factor if ref.reforecast_results else None
+        ref_gap_by = {(g.interval_start, g.date, g.channel): g.gap_fte for g in ref.staffing_gaps}
+
+        for r in runs[1:]:
+            by_start = {iv.interval_start: iv for iv in r.intervals}
+            assert set(by_start.keys()) == set(ref_by_start.keys())
+            for k, ref_iv in ref_by_start.items():
+                # completed 08:00 keeps its 200.0 against any shuffle
+                if k == "08:00":
+                    assert by_start[k].actual_volume == 200.0, f"{k}: {by_start[k].actual_volume}"
+                else:
+                    assert by_start[k].actual_volume is None, f"{k} should be future/None"
+                assert by_start[k].forecast_volume == ref_iv.forecast_volume
+            # reforecast scale identical
+            assert r.reforecast_results
+            assert abs(r.reforecast_results[0].scale_factor - ref_scale) < 1e-9
+            # staffing gaps identical
+            rg = {(g.interval_start, g.date, g.channel): g.gap_fte for g in r.staffing_gaps}
+            assert rg == ref_gap_by
