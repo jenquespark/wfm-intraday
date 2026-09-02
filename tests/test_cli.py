@@ -318,6 +318,81 @@ class TestCLI:
         assert result.returncode == 0, f"stderr={result.stderr}"
 
 
+class TestConfigTypeErrorExitCode:
+    """A config whose values have the wrong types must exit 1, no traceback."""
+
+    @pytest.mark.parametrize(
+        "bad_yaml",
+        [
+            'interval_length_minutes: "30"\n',
+            'aht_seconds: "270"\n',
+            'shrinkage_pct: "0.34"\n',
+            "shrinkage_pct: .nan\n",
+            'chat_concurrency: "3"\n',
+            'channels:\n  voice:\n    channel_type: voice\n    concurrency: "3"\n',
+            'channels:\n  voice:\n    channel_type: voice\n    enabled: "yes"\n',
+        ],
+    )
+    def test_malformed_type_config_exits_1_no_traceback(self, tmp_path, bad_yaml):
+        fc = tmp_path / "fc.csv"
+        ac = tmp_path / "ac.csv"
+        _write_csv(fc, "forecast")
+        _write_csv(ac, "actuals")
+        cfg = tmp_path / "bad.yaml"
+        cfg.write_text(bad_yaml)
+        result = _run(
+            ["validate", "--forecast", str(fc), "--actual", str(ac), "--config", str(cfg)]
+        )
+        assert result.returncode == 1, f"stderr={result.stderr}"
+        assert "Traceback" not in result.stderr
+
+
+class TestWebCommand:
+    """cmd_web propagates the streamlit subprocess exit code."""
+
+    def test_web_subprocess_nonzero_returns_3(self, monkeypatch):
+        """A failing streamlit web process must NOT report success — exit 3."""
+        import argparse
+        import types
+
+        import wfm_intraday.cli.main as cli_main
+
+        monkeypatch.setitem(sys.modules, "streamlit", types.ModuleType("streamlit"))
+
+        class _FakeProc:
+            returncode = 3
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc())
+        assert cli_main.cmd_web(argparse.Namespace()) == 3  # EXIT_CALC_ERROR
+
+    def test_web_subprocess_zero_returns_0(self, monkeypatch):
+        """A successful streamlit web process returns success (exit 0)."""
+        import argparse
+        import types
+
+        import wfm_intraday.cli.main as cli_main
+
+        monkeypatch.setitem(sys.modules, "streamlit", types.ModuleType("streamlit"))
+
+        class _FakeProc:
+            returncode = 0
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc())
+        assert cli_main.cmd_web(argparse.Namespace()) == 0  # EXIT_SUCCESS
+
+    def test_web_import_missing_returns_2(self, monkeypatch):
+        """Missing streamlit keeps the clear message and returns the input
+        error code (2) as before — never a traceback or a false success."""
+        import argparse
+
+        import wfm_intraday.cli.main as cli_main
+
+        # sys.modules['streamlit'] = None makes `import streamlit` raise
+        # ImportError, matching an environment without the web extra.
+        monkeypatch.setitem(sys.modules, "streamlit", None)
+        assert cli_main.cmd_web(argparse.Namespace()) == 2  # EXIT_INPUT_ERROR
+
+
 def _write_csv(path, kind, **over):
     if kind == "forecast":
         row = {

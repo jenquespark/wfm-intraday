@@ -305,7 +305,15 @@ def _validate_numeric(df: pd.DataFrame, label: str) -> None:
 
 
 def _validate_dates(df: pd.DataFrame, label: str) -> None:
-    """Ensure date values are valid ``YYYY-MM-DD`` calendar dates."""
+    """Ensure date values are valid ``YYYY-MM-DD`` calendar dates.
+
+    Also writes the surrounding-whitespace-stripped canonical date back into
+    ``df["date"]`` (e.g. ``" 2026-09-01 "`` -> ``"2026-09-01"``), so padded
+    forecast dates normalize to the same canonical value as actuals/staffing
+    and the key sets match.  Only the exact ``YYYY-MM-DD`` format is accepted;
+    invalid values still raise, and there is no broader format conversion.
+    """
+    normalized: list[str] = []
     for v in df["date"]:
         s = str(v).strip()
         if not _DATE_RE.match(s):
@@ -319,6 +327,8 @@ def _validate_dates(df: pd.DataFrame, label: str) -> None:
             raise ValueError(
                 f"{label}: invalid calendar date '{s}'. Expected a real YYYY-MM-DD date."
             )
+        normalized.append(s)
+    df["date"] = normalized
 
 
 def _validate_interval_starts(df: pd.DataFrame, label: str) -> None:

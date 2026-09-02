@@ -330,7 +330,13 @@ def cmd_web(args: argparse.Namespace) -> int:
     import subprocess
 
     web_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "app.py")
-    subprocess.run([sys.executable, "-m", "streamlit", "run", web_path], check=False)
+    proc = subprocess.run([sys.executable, "-m", "streamlit", "run", web_path], check=False)
+    if proc.returncode != 0:
+        print(
+            f"ERROR: Streamlit web process exited with code {proc.returncode}",
+            file=sys.stderr,
+        )
+        return EXIT_CALC_ERROR
     return EXIT_SUCCESS
 
 

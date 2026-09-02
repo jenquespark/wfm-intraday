@@ -1436,3 +1436,99 @@ class TestScopeFiltersBeforeReconciliation:
         assert all(iv.date == "2026-09-01" for iv in result.intervals)
         assert len(result.intervals) == 1
         assert result.intervals[0].scheduled_fte == 10.0
+
+
+class TestCanonicalDateNormalization:
+    """Padded forecast dates normalize to canonical YYYY-MM-DD so forecast /
+    actuals / staffing key sets match on canonical dates."""
+
+    def test_padded_forecast_date_matches_canonical_actuals(self):
+        from wfm_intraday import validate
+
+        tmp = tempfile.mkdtemp()
+        try:
+            fc_path = os.path.join(tmp, "fc.csv")
+            ac_path = os.path.join(tmp, "ac.csv")
+            _write(fc_path, _forecast(4, date=" 2026-09-01 "))
+            _write(ac_path, _actuals(4, date="2026-09-01"))
+            report = validate(fc_path, ac_path)
+            assert report.matched_keys == 4
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_output_date_is_canonical(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            fc_path = os.path.join(tmp, "fc.csv")
+            ac_path = os.path.join(tmp, "ac.csv")
+            _write(fc_path, _forecast(4, date=" 2026-09-01 "))
+            _write(ac_path, _actuals(4, date="2026-09-01"))
+            result = analyze(fc_path, ac_path, config_obj=Config(reforecast_blend_factor=1.0))
+            # Stored/result dates carry the stripped canonical value.
+            assert all(iv.date == "2026-09-01" for iv in result.intervals)
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_date_filter_matches_padded_forecast_dates(self):
+        """The canonical and padded date filters both match the normalized rows."""
+        tmp = tempfile.mkdtemp()
+        try:
+            fc_path = os.path.join(tmp, "fc.csv")
+            ac_path = os.path.join(tmp, "ac.csv")
+            _write(fc_path, _forecast(4, date=" 2026-09-01 "))
+            _write(ac_path, _actuals(4, date="2026-09-01"))
+            result = analyze(fc_path, ac_path, date_filter="2026-09-01")
+            assert len(result.intervals) == 4
+            result_padded = analyze(fc_path, ac_path, date_filter=" 2026-09-01 ")
+            assert len(result_padded.intervals) == 4
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_invalid_calendar_date_raises(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            fc_path = os.path.join(tmp, "fc.csv")
+            ac_path = os.path.join(tmp, "ac.csv")
+            _write(fc_path, _forecast(4, date="2026-09-31"))
+            _write(ac_path, _actuals(4, date="2026-09-01"))
+            with pytest.raises(ValueError, match="calendar date"):
+                analyze(fc_path, ac_path)
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_invalid_calendar_date_cli_exit_2(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            fc_path = os.path.join(tmp, "fc.csv")
+            ac_path = os.path.join(tmp, "ac.csv")
+            _write(fc_path, _forecast(4, date="2026-02-30"))
+            _write(ac_path, _actuals(4, date="2026-09-01"))
+            r = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "wfm_intraday.cli.main",
+                    "validate",
+                    "--forecast",
+                    str(fc_path),
+                    "--actual",
+                    str(ac_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert r.returncode == 2, f"stderr={r.stderr}"
+            assert "Traceback" not in r.stderr
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)

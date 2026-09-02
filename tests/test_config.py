@@ -191,3 +191,101 @@ class TestConfigChannelContract:
         )
         assert cfg.channels["backoffice"].channel_type.value == "chat"
         assert cfg.channels["backoffice"].concurrency == 2
+
+
+class TestConfigStrictTypes:
+    """Every malformed config value raises a clean ValueError, never a
+    raw TypeError / AttributeError / traceback."""
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"interval_length_minutes": "30"},
+            {"aht_seconds": "270"},
+            {"sl_threshold_seconds": "20"},
+            {"chat_sl_threshold_seconds": "60"},
+            {"chat_concurrency": "3"},
+            {"max_movement_window_intervals": "4"},
+            {"max_movement_window_minutes": "120"},
+            {"shrinkage_pct": "0.34"},
+            {"service_level": "0.8"},
+            {"max_occupancy": "0.85"},
+            {"understaff_threshold_pct": "0.1"},
+            {"overstaff_threshold_pct": "0.15"},
+            {"reforecast_blend_factor": "0.5"},
+        ],
+    )
+    def test_string_numeric_not_coerced(self, bad):
+        """String numerics must NOT be silently coerced — clean ValueError."""
+        with pytest.raises(ValueError):
+            Config.from_dict(bad)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"interval_length_minutes": True},
+            {"aht_seconds": True},
+            {"chat_concurrency": False},
+            {"shrinkage_pct": True},
+            {"service_level": False},
+            {"max_occupancy": True},
+            {"understaff_threshold_pct": True},
+            {"overstaff_threshold_pct": True},
+            {"reforecast_blend_factor": True},
+        ],
+    )
+    def test_bool_rejected_as_numeric(self, bad):
+        """A bool must not be accepted as a numeric value."""
+        with pytest.raises(ValueError):
+            Config.from_dict(bad)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"shrinkage_pct": float("nan")},
+            {"shrinkage_pct": float("inf")},
+            {"shrinkage_pct": float("-inf")},
+            {"service_level": float("nan")},
+            {"service_level": float("inf")},
+            {"max_occupancy": float("nan")},
+            {"understaff_threshold_pct": float("nan")},
+            {"overstaff_threshold_pct": float("nan")},
+            {"reforecast_blend_factor": float("nan")},
+        ],
+    )
+    def test_non_finite_float_rejected(self, bad):
+        """NaN/inf are rejected for float fields."""
+        with pytest.raises(ValueError, match="finite"):
+            Config.from_dict(bad)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"channels": {"voice": {"channel_type": "voice", "concurrency": "3"}}},
+            {"channels": {"voice": {"channel_type": "voice", "concurrency": True}}},
+            {"channels": {"voice": {"channel_type": "voice", "concurrency": 2.5}}},
+            {"channels": {"voice": {"channel_type": "voice", "enabled": "yes"}}},
+            {"channels": {"voice": {"channel_type": "voice", "enabled": 1}}},
+        ],
+    )
+    def test_malformed_channel_config_raises(self, bad):
+        """Nested ChannelConfig types are strict: concurrency int, enabled bool."""
+        with pytest.raises(ValueError):
+            Config.from_dict(bad)
+
+    def test_direct_config_construction_with_string_raises(self):
+        """Direct Config(...) construction with the wrong type raises ValueError."""
+        with pytest.raises(ValueError, match="interval_length_minutes"):
+            Config(interval_length_minutes="30").validate()
+
+    def test_valid_int_and_float_values_still_accepted(self):
+        cfg = Config.from_dict(
+            {
+                "interval_length_minutes": 15,
+                "shrinkage_pct": 0.2,
+                "max_movement_window_intervals": 0,
+                "max_movement_window_minutes": 0,
+            }
+        )
+        assert cfg.interval_length_minutes == 15
+        assert cfg.shrinkage_pct == 0.2

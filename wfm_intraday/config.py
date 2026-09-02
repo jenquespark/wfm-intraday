@@ -11,6 +11,7 @@ outputs without any indication.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -115,6 +116,62 @@ class ChannelType(str, Enum):
 # intentionally excluded — it is experimental and unreachable via CLI/web/API.
 SUPPORTED_CHANNELS = frozenset({"voice", "chat"})
 
+# Root config fields that must hold a real ``int`` (bools/strings/non-int
+# numerics are rejected — never silently coerced).
+_INT_NUMERIC_FIELDS = (
+    "interval_length_minutes",
+    "aht_seconds",
+    "sl_threshold_seconds",
+    "chat_sl_threshold_seconds",
+    "chat_concurrency",
+    "max_movement_window_intervals",
+    "max_movement_window_minutes",
+)
+
+# Root config fields that must hold a real finite float/int (bools, strings,
+# and NaN/inf are rejected — never silently coerced).
+_FLOAT_NUMERIC_FIELDS = (
+    "shrinkage_pct",
+    "service_level",
+    "max_occupancy",
+    "understaff_threshold_pct",
+    "overstaff_threshold_pct",
+    "reforecast_blend_factor",
+)
+
+
+def _collect_type_errors(values: dict[str, Any]) -> list[str]:
+    """Return one clean error message per strict-type violation.
+
+    Used by both ``Config.validate()`` and ``Config.from_dict()`` so every
+    malformed value raises a ``ValueError`` (never a raw TypeError /
+    AttributeError).  Rule: bool must not count as a number; string numerics
+    are never coerced; float fields reject NaN/inf; ``channel`` must be a
+    string.  Range/domain checks are handled separately by ``validate()``.
+    """
+    errors: list[str] = []
+    for fname in _INT_NUMERIC_FIELDS:
+        if fname not in values:
+            continue
+        v = values[fname]
+        if isinstance(v, bool) or not isinstance(v, int):
+            errors.append(f"{fname} must be an integer, got {type(v).__name__}: {v!r}")
+    for fname in _FLOAT_NUMERIC_FIELDS:
+        if fname not in values:
+            continue
+        v = values[fname]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            errors.append(f"{fname} must be a number, got {type(v).__name__}: {v!r}")
+            continue
+        if not math.isfinite(float(v)):
+            errors.append(f"{fname} must be finite, got {v!r}")
+    if "channel" in values and not isinstance(values["channel"], str):
+        errors.append(
+            f"channel must be a string, got {type(values['channel']).__name__}: "
+            f"{values['channel']!r}"
+        )
+    return errors
+
 
 @dataclass(frozen=True)
 class ChannelConfig:
@@ -134,8 +191,22 @@ class ChannelConfig:
 
     def validate(self) -> None:
         errors: list[str] = []
-        if self.concurrency < 1:
+        if isinstance(self.concurrency, bool) or not isinstance(self.concurrency, int):
+            errors.append(
+                f"concurrency must be a positive integer, got "
+                f"{type(self.concurrency).__name__}: {self.concurrency!r}"
+            )
+        elif self.concurrency < 1:
             errors.append(f"concurrency must be >= 1, got {self.concurrency}")
+        if not isinstance(self.enabled, bool):
+            errors.append(
+                f"enabled must be a boolean, got {type(self.enabled).__name__}: {self.enabled!r}"
+            )
+        if not isinstance(self.channel_type, ChannelType) or self.channel_type not in (
+            ChannelType.VOICE,
+            ChannelType.CHAT,
+        ):
+            errors.append(f"channel_type must be 'voice' or 'chat', got {self.channel_type!r}")
         if errors:
             raise ValueError("ChannelConfig validation: " + "; ".join(errors))
 
@@ -213,8 +284,18 @@ class Config:
     # Validation
     # ------------------------------------------------------------------
     def validate(self) -> None:
-        """Raise ``ValueError`` if any config value is out of range."""
+        """Raise ``ValueError`` if any config value is malformed or out of range.
+
+        Strict types are enforced first (bool/string/non-finite values raise a
+        clean ``ValueError``, never a raw TypeError), then domain ranges.
+        """
         errors: list[str] = []
+
+        # ── Strict type checks (numeric fields + channel).  If a value has the
+        #    wrong type, skip the numeric range checks that would crash on it.
+        errors.extend(_collect_type_errors(vars(self)))
+        if errors:
+            raise ValueError("Config validation failed:\n" + "\n".join(errors))
 
         if self.interval_length_minutes <= 0:
             errors.append(
@@ -232,6 +313,10 @@ class Config:
             errors.append(f"max_occupancy must be in [0, 1], got {self.max_occupancy}")
         if self.chat_concurrency < 1:
             errors.append(f"chat_concurrency must be >= 1, got {self.chat_concurrency}")
+        if self.chat_sl_threshold_seconds <= 0:
+            errors.append(
+                f"chat_sl_threshold_seconds must be > 0, got {self.chat_sl_threshold_seconds}"
+            )
         if not 0 <= self.understaff_threshold_pct <= 1:
             errors.append(
                 f"understaff_threshold_pct must be in [0, 1], got {self.understaff_threshold_pct}"
@@ -364,6 +449,13 @@ class Config:
                     enabled=ch_data.get("enabled", True),
                 )
             filtered["channels"] = channels
+
+        # Enforce strict numeric/string types BEFORE constructing the dataclass,
+        # so a malformed value (e.g. a string where an int is required) raises a
+        # clean ValueError rather than a raw TypeError from the range checks.
+        type_errors = _collect_type_errors(filtered)
+        if type_errors:
+            raise ValueError("Config validation failed:\n" + "\n".join(type_errors))
 
         cfg = cls(**filtered)
         cfg.validate()
